@@ -15,6 +15,9 @@ const maxMessageRunes = 1900
 
 const (
 	maxTitleRunes     = 200
+	maxKeyRunes       = 100
+	maxStatusRunes    = 100
+	maxURLRunes       = 300
 	maxCommitMsgRunes = 80
 	shortSHALength    = 7
 	ghostMention      = "@ghost"
@@ -32,29 +35,38 @@ type renderInput struct {
 }
 
 func renderGroup(in renderInput) (content string, mentionIDs []string) {
-	g := in.Group
+	in.Group.Key = cutRunes(in.Group.Key, maxKeyRunes, "…")
 	head := headerLines(in)
-	items := make([]string, len(g.Items))
-	for i, it := range g.Items {
+	items := make([]string, len(in.Group.Items))
+	for i, it := range in.Group.Items {
 		items[i] = itemLine(in, it)
 	}
-	mentions, ids := mentionLine(in)
+	mentions := mentionParts(in)
 
-	build := func(shown []string) string {
+	build := func(shown []string, m []mention, ellipsis bool) string {
 		parts := append(slices.Clone(head), shown...)
-		return strings.Join(append(parts, mentions), "\n")
+		return strings.Join(append(parts, mentionText(m, ellipsis)), "\n")
 	}
-	content = build(items)
-	if utf8.RuneCountInString(content) > maxMessageRunes {
+	fits := func(s string) bool { return utf8.RuneCountInString(s) <= maxMessageRunes }
+
+	content = build(items, mentions, false)
+	if !fits(content) {
 		for keep := len(items) - 1; keep >= 0; keep-- {
 			shown := append(slices.Clone(items[:keep]), fmt.Sprintf(droppedItemsFmt, len(items)-keep))
-			content = build(shown)
-			if utf8.RuneCountInString(content) <= maxMessageRunes {
-				break
+			if content = build(shown, mentions, false); fits(content) {
+				return content, idsOf(mentions)
+			}
+		}
+		// Every item is gone and the message is still too long: the mentions
+		// line is the only unbounded part left, so shorten it.
+		shown := []string{fmt.Sprintf(droppedItemsFmt, len(items))}
+		for k := len(mentions) - 1; k >= 0; k-- {
+			if content = build(shown, mentions[:k], true); fits(content) {
+				return content, idsOf(mentions[:k])
 			}
 		}
 	}
-	return content, ids
+	return content, idsOf(mentions)
 }
 
 func headerLines(in renderInput) []string {
@@ -64,9 +76,14 @@ func headerLines(in renderInput) []string {
 	case drift.KindTicket:
 		switch {
 		case in.Task != nil:
+			status := "статус в ClickUp: " + cutRunes(in.Task.Status, maxStatusRunes, "…")
+			// A cut link is useless, so an overlong one is left out.
+			if utf8.RuneCountInString(in.Task.URL) <= maxURLRunes {
+				status = in.Task.URL + " · " + status
+			}
 			out = append(out,
 				fmt.Sprintf("**%s** · %s", g.Key, cutRunes(in.Task.Name, maxTitleRunes, "…")),
-				fmt.Sprintf("%s · статус в ClickUp: %s", in.Task.URL, in.Task.Status))
+				status)
 		case in.TaskMissing:
 			out = append(out, fmt.Sprintf("**%s**", g.Key), g.Key+" не найден в ClickUp")
 		default:
@@ -121,27 +138,57 @@ func itemLine(in renderInput, it drift.Item) string {
 	}
 	c := it.Commit
 	msg, _, _ := strings.Cut(c.Message, "\n")
+	msg = strings.TrimSuffix(msg, "\r")
 	return fmt.Sprintf("%s — [`%s`](https://github.com/%s/%s/commit/%s) %s",
 		it.Target, shortSHA(c.SHA), in.Owner, in.Repo, c.SHA, cutRunes(msg, maxCommitMsgRunes, ""))
 }
 
-func mentionLine(in renderInput) (string, []string) {
-	var parts, ids []string
+// mention is one entry of the last line; id is set only for <@id> mentions.
+type mention struct{ text, id string }
+
+func mentionParts(in renderInput) []mention {
+	var out []mention
+	var seen []string
 	for _, login := range in.Group.Logins {
-		if id, ok := in.Users[strings.ToLower(login)]; ok {
-			parts = append(parts, "<@"+id+">")
-			if !slices.Contains(ids, id) {
-				ids = append(ids, id)
-			}
+		lower := strings.ToLower(login)
+		if slices.Contains(seen, lower) {
+			continue
+		}
+		seen = append(seen, lower)
+		if id, ok := in.Users[lower]; ok {
+			out = append(out, mention{"<@" + id + ">", id})
 		} else {
-			parts = append(parts, "@"+login)
+			out = append(out, mention{text: "@" + login})
 		}
 	}
-	parts = append(parts, in.Group.Names...)
-	if len(parts) == 0 {
-		parts = []string{ghostMention}
+	for _, n := range in.Group.Names {
+		out = append(out, mention{text: n})
 	}
-	return strings.Join(parts, " "), ids
+	if len(out) == 0 {
+		out = []mention{{text: ghostMention}}
+	}
+	return out
+}
+
+func mentionText(m []mention, ellipsis bool) string {
+	parts := make([]string, 0, len(m)+1)
+	for _, x := range m {
+		parts = append(parts, x.text)
+	}
+	if ellipsis {
+		parts = append(parts, "…")
+	}
+	return strings.Join(parts, " ")
+}
+
+func idsOf(m []mention) []string {
+	var ids []string
+	for _, x := range m {
+		if x.id != "" && !slices.Contains(ids, x.id) {
+			ids = append(ids, x.id)
+		}
+	}
+	return ids
 }
 
 func renderCorrection(repo, target, base, reason string) string {

@@ -243,3 +243,73 @@ func TestRenderCorrectionAndSummary(t *testing.T) {
 		t.Errorf("summary one = %q", got)
 	}
 }
+
+func TestRenderManyMentionsFitsLimit(t *testing.T) {
+	g := ticketGroup()
+	in := baseInput(g)
+	for i := 0; i < 400; i++ {
+		login := fmt.Sprintf("user%d", i)
+		in.Group.Logins = append(in.Group.Logins, login)
+		in.Users[login] = fmt.Sprintf("%018d", 100000000000000000+i)
+	}
+	got, ids := renderGroup(in)
+	if n := utf8.RuneCountInString(got); n > maxMessageRunes {
+		t.Errorf("%d runes", n)
+	}
+	l := lines(got)
+	last := l[len(l)-1]
+	if !strings.HasPrefix(last, "<@") || !strings.HasSuffix(last, "…") {
+		t.Errorf("last = %q", last)
+	}
+	if len(ids) == 0 || len(ids) >= 400 {
+		t.Errorf("len(ids) = %d", len(ids))
+	}
+	for _, id := range ids {
+		if !strings.Contains(got, "<@"+id+">") {
+			t.Errorf("id %s not in content", id)
+		}
+	}
+}
+
+func TestRenderLongStatusAndKeyCapped(t *testing.T) {
+	in := baseInput(ticketGroup("bob"))
+	in.Task = &clickup.Task{Name: "N", URL: "https://x/t/1", Status: strings.Repeat("с", 3000)}
+	got, _ := renderGroup(in)
+	if n := utf8.RuneCountInString(got); n > maxMessageRunes {
+		t.Errorf("%d runes", n)
+	}
+	if want := "https://x/t/1 · статус в ClickUp: " + strings.Repeat("с", 100) + "…"; lines(got)[1] != want {
+		t.Errorf("line 2 = %q", lines(got)[1])
+	}
+	g := drift.Group{Kind: drift.KindBranch, Key: strings.Repeat("k", 3000), Logins: []string{"bob"},
+		Items: []drift.Item{pr("dev", 1, "b")}}
+	got, _ = renderGroup(baseInput(g))
+	if n := utf8.RuneCountInString(got); n > maxMessageRunes {
+		t.Errorf("%d runes", n)
+	}
+}
+
+func TestRenderOverlongURLOmitted(t *testing.T) {
+	in := baseInput(ticketGroup("bob"))
+	in.Task = &clickup.Task{Name: "N", URL: "https://x/" + strings.Repeat("u", 390), Status: "in stage"}
+	got, _ := renderGroup(in)
+	if l := lines(got)[1]; l != "статус в ClickUp: in stage" {
+		t.Errorf("line 2 = %q", l)
+	}
+}
+
+func TestRenderCaseOnlyDuplicateLoginShownOnce(t *testing.T) {
+	l, _ := lastLine(baseInput(ticketGroup("Carol", "carol")))
+	if l != "@Carol" {
+		t.Errorf("last = %q", l)
+	}
+}
+
+func TestRenderCommitMessageTrailingCR(t *testing.T) {
+	g := drift.Group{Kind: drift.KindCommits, Key: "ann", Logins: []string{"ann"},
+		Items: []drift.Item{{Target: "dev", Commit: &drift.Commit{SHA: "abc1234def", Message: "fix\r\nbody"}}}}
+	got, _ := renderGroup(baseInput(g))
+	if strings.Contains(got, "\r") {
+		t.Errorf("got %q", got)
+	}
+}

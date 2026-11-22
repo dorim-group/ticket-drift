@@ -20,6 +20,7 @@ const (
 	max429       = 10 // rate-limit waits, counted apart from attempts
 	flagNoEmbeds = 4  // suppress link previews
 	defaultWait  = time.Second
+	maxWait      = time.Minute // cap on any one rate-limit wait
 	maxBodyBytes = 1 << 20
 )
 
@@ -127,7 +128,7 @@ func retryAfter(resp *http.Response, body []byte) time.Duration {
 		RetryAfter float64 `json:"retry_after"`
 	}
 	if json.Unmarshal(body, &out) == nil && out.RetryAfter > 0 {
-		return time.Duration(out.RetryAfter * float64(time.Second))
+		return wait(out.RetryAfter)
 	}
 	if d, ok := seconds(resp.Header.Get("Retry-After")); ok {
 		return d
@@ -137,8 +138,17 @@ func retryAfter(resp *http.Response, body []byte) time.Duration {
 
 func seconds(s string) (time.Duration, bool) {
 	f, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
-	if err != nil || f < 0 {
+	if err != nil || !(f >= 0) { // also rejects NaN
 		return 0, false
 	}
-	return time.Duration(f * float64(time.Second)), true
+	return wait(f), true
+}
+
+// wait converts Discord's seconds to a sleep, capped before the conversion
+// so a huge value cannot overflow.
+func wait(sec float64) time.Duration {
+	if sec >= maxWait.Seconds() {
+		return maxWait
+	}
+	return time.Duration(sec * float64(time.Second))
 }

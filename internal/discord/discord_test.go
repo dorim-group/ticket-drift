@@ -177,3 +177,40 @@ func TestPostErrorHidesWebhookURL(t *testing.T) {
 		}
 	}
 }
+
+// No single rate-limit wait may stall the run for longer than a minute,
+// whichever of Discord's three hints asks for it.
+func TestRateLimitSleepsAreCapped(t *testing.T) {
+	for name, h := range map[string]http.HandlerFunc{
+		"retry_after body": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(`{"retry_after":3600}`))
+		},
+		"Retry-After header": func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Retry-After", "3600")
+			w.WriteHeader(http.StatusTooManyRequests)
+		},
+		"X-RateLimit-Reset-After": func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-RateLimit-Remaining", "0")
+			w.Header().Set("X-RateLimit-Reset-After", "3600")
+			w.WriteHeader(http.StatusNoContent)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var n atomic.Int32
+			c, slept := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if n.Add(1) == 1 {
+					h(w, r)
+					return
+				}
+				w.WriteHeader(http.StatusNoContent)
+			})
+			if err := c.Post("x", nil); err != nil {
+				t.Fatal(err)
+			}
+			if want := []time.Duration{time.Minute}; !slices.Equal(*slept, want) {
+				t.Errorf("sleeps = %v, want %v", *slept, want)
+			}
+		})
+	}
+}

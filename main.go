@@ -6,6 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+
+	"github.com/dorim-group/ticket-drift/internal/clickup"
+	"github.com/dorim-group/ticket-drift/internal/discord"
+	"github.com/dorim-group/ticket-drift/internal/github"
 )
 
 // Set via -ldflags at release time.
@@ -42,18 +46,53 @@ func main() {
 	}
 }
 
-// cmdSync is a stub until the sync command lands; only the configuration
-// handling is real.
 func cmdSync(args []string) {
-	if _, err := parseConfig(args, os.Getenv, os.ReadFile); err != nil {
+	cfg, err := parseConfig(args, os.Getenv, os.ReadFile)
+	if err != nil {
 		var he helpError
 		if errors.As(err, &he) {
 			fmt.Print(he.Usage)
 			os.Exit(0)
 		}
-		fmt.Fprintf(os.Stderr, "ticket-drift: %v\n", err)
-		os.Exit(1)
+		fail(err)
 	}
-	fmt.Fprintln(os.Stderr, "ticket-drift: sync: not implemented")
+
+	var gh *github.Client
+	if cfg.GitHubToken != "" {
+		gh = github.NewTokenClient(cfg.GitHubToken)
+	} else if gh, err = github.NewAppClient(cfg.AppID, cfg.AppInstallationID, cfg.AppKey); err != nil {
+		fail(err)
+	}
+	var dc notifier = noNotifier{}
+	if !cfg.DryRun {
+		dc = discord.New(cfg.DiscordWebhook)
+	}
+
+	rep, runErr := runSync(cfg,
+		github.RepoSource{C: gh, Owner: cfg.Owner, Repo: cfg.Repo},
+		clickup.New(cfg.ClickUpToken, cfg.ClickUpTeamID),
+		dc, os.Stdout)
+	// The report is written on failure too: it says how far the run got.
+	if cfg.OutJSON != "" {
+		if err := writeReport(cfg.OutJSON, rep); err != nil {
+			runErr = errors.Join(runErr, err)
+		}
+	}
+	if runErr != nil {
+		fail(runErr)
+	}
+}
+
+func fail(err error) {
+	fmt.Fprintf(os.Stderr, "ticket-drift: %v\n", err)
 	os.Exit(1)
+}
+
+// noNotifier stands in for Discord in -dry-run, where no webhook is
+// configured. runSync never posts in a dry run; if it ever did, failing is
+// safer than pretending a message was delivered.
+type noNotifier struct{}
+
+func (noNotifier) Post(string, []string) error {
+	return errors.New("sync: posting is disabled in -dry-run")
 }

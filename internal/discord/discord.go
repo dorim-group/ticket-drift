@@ -68,9 +68,10 @@ func (c *Client) Post(content string, mentionUserIDs []string) error {
 		resp, err := c.send(u.String(), body)
 		var status int
 		var raw []byte
+		var readErr error // only reported for an error status: a 2xx body is never needed
 		if err == nil {
 			status = resp.StatusCode
-			raw, _ = io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+			raw, readErr = io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
 			resp.Body.Close()
 		}
 
@@ -89,6 +90,8 @@ func (c *Client) Post(content string, mentionUserIDs []string) error {
 			}
 			c.Sleep(retryAfter(resp, raw))
 			continue
+		case err == nil && status < 500 && readErr != nil:
+			return fmt.Errorf("discord: status %d, and reading the response body failed: %w", status, readErr)
 		case err == nil && status < 500:
 			return fmt.Errorf("discord: status %d: %s", status, strings.TrimSpace(string(raw)))
 		}

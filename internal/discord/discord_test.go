@@ -2,6 +2,7 @@ package discord
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -162,19 +163,118 @@ func TestPostFailsFastOn4xx(t *testing.T) {
 }
 
 func TestPostErrorHidesWebhookURL(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
-	hook := srv.URL + "/api/webhooks/1/secrettoken"
-	srv.Close() // connection refused
-	c := New(hook)
-	c.Sleep = func(time.Duration) {}
-	err := c.Post("x", nil)
-	if err == nil {
-		t.Fatal("want error")
-	}
-	for _, leak := range []string{"secrettoken", "/api/webhooks", srv.URL} {
-		if strings.Contains(err.Error(), leak) {
-			t.Errorf("error leaks %q: %v", leak, err)
+	refused := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	refused.Close()
+	hangsUp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Error(err)
+			return
 		}
+		_ = conn.Close()
+	}))
+	t.Cleanup(hangsUp.Close)
+
+	for name, base := range map[string]string{"connection refused": refused.URL, "connection closed": hangsUp.URL} {
+		c := New(base + "/api/webhooks/1/secrettoken")
+		c.Sleep = func(time.Duration) {}
+		err := c.Post("x", nil)
+		if err == nil {
+			t.Fatalf("%s: want error", name)
+		}
+		for _, leak := range []string{"secrettoken", "/api/webhooks"} {
+			if strings.Contains(err.Error(), leak) {
+				t.Errorf("%s: error leaks %q: %v", name, leak, err)
+			}
+		}
+	}
+}
+
+func TestPostGivesUpAfterTenRateLimitWaits(t *testing.T) {
+	var n atomic.Int32
+	c, slept := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		n.Add(1)
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"retry_after":0.1}`))
+	})
+	err := c.Post("x", nil)
+	if err == nil || !strings.Contains(err.Error(), "rate limited") {
+		t.Fatalf("err = %v, want a rate-limit error", err)
+	}
+	if n.Load() != 11 || len(*slept) != 10 {
+		t.Errorf("requests = %d, sleeps = %d; want 11 and 10", n.Load(), len(*slept))
+	}
+}
+
+func TestPostGivesUpAfterFour5xx(t *testing.T) {
+	var n atomic.Int32
+	c, slept := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		n.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	})
+	err := c.Post("x", nil)
+	if err == nil || !strings.Contains(err.Error(), "503") {
+		t.Fatalf("err = %v, want a give-up error naming 503", err)
+	}
+	if n.Load() != 4 {
+		t.Errorf("requests = %d, want 4", n.Load())
+	}
+	if want := []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}; !slices.Equal(*slept, want) {
+		t.Errorf("sleeps = %v, want %v", *slept, want)
+	}
+}
+
+func TestPost429Waits(t *testing.T) {
+	for name, tc := range map[string]struct {
+		header, body string
+		want         time.Duration
+	}{
+		"Retry-After header without retry_after": {"2", `{"message":"slow down"}`, 2 * time.Second},
+		"neither given":                          {"", ``, time.Second},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var n atomic.Int32
+			c, slept := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if n.Add(1) == 1 {
+					if tc.header != "" {
+						w.Header().Set("Retry-After", tc.header)
+					}
+					w.WriteHeader(http.StatusTooManyRequests)
+					_, _ = w.Write([]byte(tc.body))
+					return
+				}
+				w.WriteHeader(http.StatusNoContent)
+			})
+			if err := c.Post("x", nil); err != nil {
+				t.Fatal(err)
+			}
+			if want := []time.Duration{tc.want}; !slices.Equal(*slept, want) {
+				t.Errorf("sleeps = %v, want %v", *slept, want)
+			}
+		})
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+type failingBody struct{}
+
+func (failingBody) Read([]byte) (int, error) { return 0, errors.New("connection reset") }
+func (failingBody) Close() error             { return nil }
+
+// An error status whose body cannot be read says so, rather than showing an
+// empty body as if Discord had sent none.
+func TestPostReportsUnreadableErrorBody(t *testing.T) {
+	c := New("https://discord.example/api/webhooks/1/secrettoken")
+	c.Sleep = func(time.Duration) {}
+	c.HTTP = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusBadRequest, Header: http.Header{}, Body: failingBody{}, Request: r}, nil
+	})}
+	err := c.Post("x", nil)
+	if err == nil || !strings.Contains(err.Error(), "400") || !strings.Contains(err.Error(), "connection reset") {
+		t.Errorf("err = %v, want status 400 and the read failure", err)
 	}
 }
 

@@ -109,7 +109,9 @@ func (w *walker) classify(c Commit, chain string) error {
 		w.descend(slices.DeleteFunc(merged, func(p string) bool { return p == pr.HeadSHA }), chain)
 	case isMerge && len(merged) == 0:
 		w.res.BackMerges = append(w.res.BackMerges, c.SHA)
-	case w.d.longLivedMerge(c.Message) != "":
+	case len(merged) > 0 && w.d.longLivedMerge(c.Message) != "":
+		// Only a commit that brought something in can carry it; a cherry-picked
+		// or squashed "Merge branch 'stage'" falls through to unattributed.
 		w.res.Carriers = append(w.res.Carriers, c.SHA)
 		w.descend(merged, w.d.longLivedMerge(c.Message))
 	default:

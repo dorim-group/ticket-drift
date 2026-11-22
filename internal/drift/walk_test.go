@@ -37,11 +37,31 @@ func runWalk(t *testing.T, r *fakeRepo, mainTip, devTip string) walkResult {
 	return res
 }
 
+func carriesSomething(r *fakeRepo, ahead map[string]Commit, res walkResult, sha string) bool {
+	c := ahead[sha]
+	for _, p := range c.Parents[min(1, len(c.Parents)):] {
+		if _, in := ahead[p]; in {
+			return true
+		}
+	}
+	n, attributed := res.attributed[sha]
+	if !attributed || len(c.Parents) != 1 {
+		return false
+	}
+	for _, p := range r.prs {
+		if _, in := ahead[p.HeadSHA]; in && p.Number == n {
+			return true
+		}
+	}
+	return false
+}
+
 // checkAccounted asserts the walk's invariant: every ahead commit on a
 // first-parent chain reachable from tip through the descents is in exactly
-// one result list, or attributed to a PR in res.PRs. The descents are derived
-// here from the graph: every parent after the first that is in the ahead set,
-// except a reported PR's own head; and the head of a single-parent carrier.
+// one result list, or attributed to a PR in res.PRs; a carrier counts only if
+// it brought something in. The descents are derived here from the graph:
+// every parent after the first that is in the ahead set, except a reported
+// PR's own head; and the head of a single-parent carrier.
 func checkAccounted(t *testing.T, r *fakeRepo, ahead map[string]Commit, tip string, res walkResult) {
 	t.Helper()
 	reported := map[int]PullRequest{}
@@ -52,8 +72,15 @@ func checkAccounted(t *testing.T, r *fakeRepo, ahead map[string]Commit, tip stri
 	for _, s := range res.BackMerges {
 		count[s]++
 	}
+	// A carrier is accounted for only by what it brought in: a merged-in
+	// parent inside the ahead set, or, for a single-parent carrier, the
+	// expanded PR head the walk added to it.
 	for _, s := range res.Carriers {
-		count[s]++
+		if carriesSomething(r, ahead, res, s) {
+			count[s]++
+		} else {
+			t.Errorf("carrier %s has nothing descended or expanded", s)
+		}
 	}
 	for _, c := range res.Unattributed {
 		count[c.SHA]++
@@ -371,6 +398,19 @@ func TestWalkSquashedCarrierUnknownHeadKeepsPR(t *testing.T) {
 	res := runWalk(t, squashedCarrierRepo("gone"), "m0", "d1")
 	wantNumbers(t, res, 9)
 	wantNone(t, res, true, true, true)
+}
+
+// A cherry-picked or squashed "Merge branch 'stage'" has one parent and
+// nothing to descend into, so it is not a carrier.
+func TestWalkSingleParentCommitNamedLikeMergeIsUnattributed(t *testing.T) {
+	r := newFakeRepo()
+	r.commit("m0")
+	r.commitMsg("d1", "Merge branch 'stage' into dev", "m0")
+	res := runWalk(t, r, "m0", "d1")
+	if len(res.Unattributed) != 1 || res.Unattributed[0].SHA != "d1" {
+		t.Errorf("Unattributed = %+v, want [d1]", res.Unattributed)
+	}
+	wantNone(t, res, true, true, false)
 }
 
 type failingSource struct{ Source }

@@ -1,0 +1,119 @@
+package clickup
+
+import (
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"slices"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+func newTestClient(t *testing.T, h http.HandlerFunc) (*Client, *[]time.Duration) {
+	t.Helper()
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	c := New("tok", "42")
+	c.BaseURL = srv.URL
+	var slept []time.Duration
+	c.Sleep = func(d time.Duration) { slept = append(slept, d) }
+	return c, &slept
+}
+
+func TestTaskByCustomID(t *testing.T) {
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v2/task/IT-10249" {
+			t.Errorf("path = %q", r.URL.Path)
+		}
+		q := r.URL.Query()
+		if q.Get("custom_task_ids") != "true" || q.Get("team_id") != "42" {
+			t.Errorf("query = %q", r.URL.RawQuery)
+		}
+		if got := r.Header.Get("Authorization"); got != "tok" {
+			t.Errorf("Authorization = %q, want %q", got, "tok")
+		}
+		_, _ = w.Write([]byte(`{"id":"abc1","custom_id":"IT-10249","name":"Fix login","url":"https://app.clickup.com/t/abc1","status":{"status":"in review"}}`))
+	})
+	got, err := c.TaskByCustomID("IT-10249")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Task{ID: "abc1", CustomID: "IT-10249", Name: "Fix login", URL: "https://app.clickup.com/t/abc1", Status: "in review"}
+	if got != want {
+		t.Errorf("got %+v, want %+v", got, want)
+	}
+}
+
+func TestTaskNotFound(t *testing.T) {
+	var n atomic.Int32
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		n.Add(1)
+		w.WriteHeader(http.StatusNotFound)
+	})
+	_, err := c.TaskByCustomID("IT-1")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+	if n.Load() != 1 {
+		t.Errorf("requests = %d, want 1", n.Load())
+	}
+}
+
+func TestTaskUnauthorizedIsNotNotFound(t *testing.T) {
+	var n atomic.Int32
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		n.Add(1)
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"err":"Token invalid"}`))
+	})
+	_, err := c.TaskByCustomID("IT-1")
+	if err == nil || errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v, want non-NotFound error", err)
+	}
+	if n.Load() != 1 {
+		t.Errorf("requests = %d, want 1", n.Load())
+	}
+}
+
+func TestTaskRetriesThenSucceeds(t *testing.T) {
+	var n atomic.Int32
+	c, slept := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if n.Add(1) < 3 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"a","custom_id":"IT-1","name":"n","url":"u","status":{"status":"s"}}`))
+	})
+	got, err := c.TaskByCustomID("IT-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != "a" {
+		t.Errorf("got %+v", got)
+	}
+	if n.Load() != 3 {
+		t.Errorf("requests = %d, want 3", n.Load())
+	}
+	if want := []time.Duration{time.Second, 2 * time.Second}; !slices.Equal(*slept, want) {
+		t.Errorf("sleeps = %v, want %v", *slept, want)
+	}
+}
+
+func TestTaskGivesUp(t *testing.T) {
+	var n atomic.Int32
+	c, slept := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		n.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	})
+	_, err := c.TaskByCustomID("IT-1")
+	if err == nil {
+		t.Fatal("want error")
+	}
+	if n.Load() != 4 {
+		t.Errorf("requests = %d, want 4", n.Load())
+	}
+	if want := []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}; !slices.Equal(*slept, want) {
+		t.Errorf("sleeps = %v, want %v", *slept, want)
+	}
+}

@@ -58,10 +58,10 @@ func parseConfig(args []string, getenv func(string) string, readFile func(string
 	fs.StringVar(&cfg.Base, "base", "main", "base branch")
 	fs.StringVar(&targets, "targets", "dev,stage", "comma-separated target branches")
 	fs.StringVar(&pattern, "ticket-pattern", `IT-\d+`, "ticket id regular expression")
-	fs.StringVar(&usersFile, "users", "", "JSON file mapping GitHub logins to ClickUp user ids")
+	fs.StringVar(&usersFile, "users", "", "JSON file mapping GitHub logins to Discord user IDs; overrides TICKET_DRIFT_USERS")
 	fs.StringVar(&cfg.OutJSON, "out-json", "", "write the JSON report to this path")
-	fs.BoolVar(&cfg.DryRun, "dry-run", false, "do not post to Discord")
-	fs.BoolVar(&cfg.NoReset, "no-reset", false, "do not reset the target branches")
+	fs.BoolVar(&cfg.DryRun, "dry-run", false, "print what would be posted and reset; post nothing to Discord and reset no branch")
+	fs.BoolVar(&cfg.NoReset, "no-reset", false, "post the messages to Discord but reset no branch")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			out.Reset()

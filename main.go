@@ -1,5 +1,5 @@
-// Command ticket-drift reports tickets merged to the base branch that have
-// not reached the target branches, and posts the result to Discord.
+// Command ticket-drift finds work merged into dev and stage that has not
+// reached main, tells its authors in Discord, then resets dev and stage to main.
 package main
 
 import (
@@ -20,7 +20,7 @@ const usageText = `ticket-drift %s (%s)
 usage: ticket-drift <command> [flags]
 
 commands:
-  sync     compare the base branch with the target branches and report drift
+  sync     tell authors of work on dev/stage missing from main, then reset dev and stage to main
   version  print version and exit
 
 Run "ticket-drift sync -h" for the flags of a command.

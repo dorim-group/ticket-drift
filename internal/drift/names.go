@@ -1,6 +1,7 @@
 package drift
 
 import (
+	"fmt"
 	"regexp"
 	"slices"
 	"strings"
@@ -10,7 +11,11 @@ const separators = "-_./"
 
 // CompilePattern compiles p case-insensitively so "it-77" matches `IT-\d+`.
 func CompilePattern(p string) (*regexp.Regexp, error) {
-	return regexp.Compile("(?i)" + p)
+	re, err := regexp.Compile("(?i)" + p)
+	if err != nil {
+		return nil, fmt.Errorf("drift: invalid ticket pattern %q: %w", p, err)
+	}
+	return re, nil
 }
 
 // TicketIDs returns every match of re in branch, upper-cased and

@@ -17,20 +17,27 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const (
 	DefaultAPIURL = "https://api.github.com"
 	acceptHeader  = "application/vnd.github+json"
 	apiVersion    = "2022-11-28"
+
+	maxAttempts  = 4
+	maxRetryWait = 60 * time.Second
+	maxErrorBody = 500 // bytes of a response body kept in an error message
 )
 
 type Client struct {
 	BaseURL   string
 	UserAgent string
 	HTTP      *http.Client
+	Sleep     func(time.Duration) // swappable so tests never really sleep
 
 	appID     string
 	installID string
@@ -51,7 +58,15 @@ type APIError struct {
 }
 
 func (e *APIError) Error() string {
-	return fmt.Sprintf("github: %s %s: status %d: %s", e.Method, e.Path, e.Status, e.Body)
+	body := e.Body
+	if len(body) > maxErrorBody {
+		cut := maxErrorBody
+		for cut > 0 && !utf8.RuneStart(body[cut]) {
+			cut--
+		}
+		body = body[:cut]
+	}
+	return fmt.Sprintf("github: %s %s: status %d: %s", e.Method, e.Path, e.Status, body)
 }
 
 func NewAppClient(appID, installationID string, pemKey []byte) (*Client, error) {
@@ -69,6 +84,7 @@ func NewAppClient(appID, installationID string, pemKey []byte) (*Client, error) 
 		BaseURL:   DefaultAPIURL,
 		UserAgent: "ticket-drift",
 		HTTP:      &http.Client{Timeout: 30 * time.Second},
+		Sleep:     time.Sleep,
 		appID:     appID,
 		installID: installationID,
 		key:       key,
@@ -81,6 +97,7 @@ func NewTokenClient(token string) *Client {
 		BaseURL:   DefaultAPIURL,
 		UserAgent: "ticket-drift",
 		HTTP:      &http.Client{Timeout: 30 * time.Second},
+		Sleep:     time.Sleep,
 		now:       time.Now,
 		token:     token,
 		static:    true,
@@ -176,19 +193,67 @@ func (c *Client) do(method, path string, body, out any) error {
 	return c.request(method, path, "Bearer "+tok, body, out)
 }
 
+// request retries transport errors, 5xx, 429 and a 403 that carries
+// Retry-After (GitHub's secondary rate limit), waiting 1s, 2s, 4s or the
+// Retry-After it gives. Every call is safe to repeat: reads, forcing a ref to
+// a fixed SHA, and minting an installation token.
 func (c *Client) request(method, path, authorization string, body, out any) error {
-	var payload io.Reader
+	var payload []byte
 	if body != nil {
 		raw, err := json.Marshal(body)
 		if err != nil {
 			return err
 		}
-		payload = bytes.NewReader(raw)
+		payload = raw
 	}
 
-	req, err := http.NewRequest(method, strings.TrimSuffix(c.BaseURL, "/")+path, payload)
+	sleep := c.Sleep
+	if sleep == nil {
+		sleep = time.Sleep
+	}
+	backoff := time.Second
+	for attempt := 1; ; attempt++ {
+		resp, raw, err := c.send(method, path, authorization, payload)
+		var wait time.Duration
+		switch {
+		case err != nil:
+			wait = backoff
+		case resp.StatusCode >= 200 && resp.StatusCode <= 299:
+			if out == nil || len(bytes.TrimSpace(raw)) == 0 {
+				return nil
+			}
+			if err := json.Unmarshal(raw, out); err != nil {
+				return fmt.Errorf("github: %s %s: decode response: %w", method, path, err)
+			}
+			return nil
+		default:
+			err = &APIError{Status: resp.StatusCode, Method: method, Path: path, Body: strings.TrimSpace(string(raw))}
+			retry := resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests ||
+				(resp.StatusCode == http.StatusForbidden && resp.Header.Get("Retry-After") != "")
+			if !retry {
+				return err
+			}
+			wait = backoff
+			if after, ok := retryAfter(resp.Header); ok {
+				wait = after
+			}
+		}
+		if attempt == maxAttempts {
+			return err
+		}
+		sleep(wait)
+		backoff *= 2
+	}
+}
+
+func (c *Client) send(method, path, authorization string, payload []byte) (*http.Response, []byte, error) {
+	var r io.Reader
+	if payload != nil {
+		r = bytes.NewReader(payload)
+	}
+	req, err := http.NewRequest(method, strings.TrimSuffix(c.BaseURL, "/")+path, r)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	req.Header.Set("Authorization", authorization)
 	req.Header.Set("Accept", acceptHeader)
@@ -198,28 +263,27 @@ func (c *Client) request(method, path, authorization string, body, out any) erro
 		ua = "ticket-drift"
 	}
 	req.Header.Set("User-Agent", ua)
-	if body != nil {
+	if payload != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	defer resp.Body.Close()
-
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return &APIError{Status: resp.StatusCode, Method: method, Path: path, Body: strings.TrimSpace(string(raw))}
+	return resp, raw, nil
+}
+
+// retryAfter reads a Retry-After given in seconds, capped at maxRetryWait.
+func retryAfter(h http.Header) (time.Duration, bool) {
+	n, err := strconv.Atoi(strings.TrimSpace(h.Get("Retry-After")))
+	if err != nil || n < 0 {
+		return 0, false
 	}
-	if out == nil || len(bytes.TrimSpace(raw)) == 0 {
-		return nil
-	}
-	if err := json.Unmarshal(raw, out); err != nil {
-		return fmt.Errorf("github: %s %s: decode response: %w", method, path, err)
-	}
-	return nil
+	return min(time.Duration(n)*time.Second, maxRetryWait), true
 }

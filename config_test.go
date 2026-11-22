@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/base64"
 	"errors"
+	"flag"
 	"reflect"
 	"strings"
 	"testing"
@@ -117,6 +118,8 @@ func TestConfigGitHubTokenOrApp(t *testing.T) {
 	// A token wins when both are present.
 	both := baseEnv()
 	both["TICKET_DRIFT_APP_ID"] = "1"
+	both["TICKET_DRIFT_APP_INSTALLATION_ID"] = "2"
+	both["TICKET_DRIFT_APP_PRIVATE_KEY"] = base64.StdEncoding.EncodeToString([]byte(pem))
 	cfg, err = parse(t, both, nil)
 	if err != nil || cfg.GitHubToken != "gh-secret" {
 		t.Fatalf("both: %v", err)
@@ -199,5 +202,55 @@ func TestConfigBaseAmongTargets(t *testing.T) {
 func TestConfigBadPattern(t *testing.T) {
 	if _, err := parse(t, baseEnv(), nil, "-ticket-pattern", "("); err == nil {
 		t.Fatal("want error")
+	}
+}
+
+func TestConfigHelp(t *testing.T) {
+	env := baseEnv()
+	_, err := parse(t, env, nil, "-h")
+	if !errors.Is(err, flag.ErrHelp) {
+		t.Fatalf("err = %v", err)
+	}
+	var he helpError
+	if !errors.As(err, &he) {
+		t.Fatalf("not a helpError: %T", err)
+	}
+	if !strings.HasPrefix(he.Usage, "usage: ticket-drift sync [flags]\n\n") {
+		t.Errorf("usage = %q", he.Usage)
+	}
+	for _, want := range []string{"-dry-run", "-targets", "-ticket-pattern"} {
+		if !strings.Contains(he.Usage, want) {
+			t.Errorf("usage lacks %s", want)
+		}
+	}
+	for _, k := range []string{"GITHUB_TOKEN", "DISCORD_WEBHOOK_URL", "CLICKUP_API_TOKEN"} {
+		if strings.Contains(he.Usage, env[k]) {
+			t.Errorf("usage leaks %s", k)
+		}
+	}
+}
+
+func TestConfigRejectsPositionalArgs(t *testing.T) {
+	_, err := parse(t, baseEnv(), nil, "foo")
+	if err == nil || !strings.Contains(err.Error(), "foo") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestConfigWhitespaceSecretIsMissing(t *testing.T) {
+	env := baseEnv()
+	env["CLICKUP_API_TOKEN"] = "  "
+	_, err := parse(t, env, nil)
+	if err == nil || !strings.Contains(err.Error(), "CLICKUP_API_TOKEN") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestConfigUsersCaseCollision(t *testing.T) {
+	env := baseEnv()
+	env["TICKET_DRIFT_USERS"] = `{"Bob":"1","bob":"2"}`
+	_, err := parse(t, env, nil)
+	if err == nil || !strings.Contains(err.Error(), `"Bob"`) || !strings.Contains(err.Error(), `"bob"`) {
+		t.Fatalf("err = %v", err)
 	}
 }

@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 )
@@ -41,8 +42,18 @@ func main() {
 	}
 }
 
-// cmdSync is a stub until the sync command lands.
+// cmdSync is a stub until the sync command lands; only the configuration
+// handling is real.
 func cmdSync(args []string) {
+	if _, err := parseConfig(args, os.Getenv, os.ReadFile); err != nil {
+		var he helpError
+		if errors.As(err, &he) {
+			fmt.Print(he.Usage)
+			os.Exit(0)
+		}
+		fmt.Fprintf(os.Stderr, "ticket-drift: %v\n", err)
+		os.Exit(1)
+	}
 	fmt.Fprintln(os.Stderr, "ticket-drift: sync: not implemented")
 	os.Exit(1)
 }

@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/dorim-group/ticket-drift/internal/drift"
@@ -30,10 +31,20 @@ type config struct {
 	ClickUpToken, ClickUpTeamID string
 }
 
+// helpError is returned when -h is given; Usage is the text to print.
+type helpError struct{ Usage string }
+
+func (helpError) Error() string { return "help requested" }
+
+func (helpError) Is(target error) bool { return target == flag.ErrHelp }
+
 // parseConfig is pure: the environment and files are reached only through
 // getenv and readFile, and nothing is printed. Every failure is returned
 // before any network use, and never contains a secret's value.
 func parseConfig(args []string, getenv func(string) string, readFile func(string) ([]byte, error)) (config, error) {
+	rawGetenv := getenv
+	getenv = func(k string) string { return strings.TrimSpace(rawGetenv(k)) }
+
 	var (
 		cfg              config
 		targets, pattern string
@@ -52,8 +63,20 @@ func parseConfig(args []string, getenv func(string) string, readFile func(string
 	fs.BoolVar(&cfg.DryRun, "dry-run", false, "do not post to Discord")
 	fs.BoolVar(&cfg.NoReset, "no-reset", false, "do not reset the target branches")
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			out.Reset()
+			fs.PrintDefaults()
+			return config{}, helpError{Usage: "usage: ticket-drift sync [flags]\n\n" + out.String()}
+		}
+		// The flag package's message already names the offending flag.
 		return config{}, fmt.Errorf("config: %w", err)
 	}
+	if fs.NArg() > 0 {
+		return config{}, fmt.Errorf("config: unexpected argument %q", fs.Arg(0))
+	}
+	cfg.Owner = strings.TrimSpace(cfg.Owner)
+	cfg.Repo = strings.TrimSpace(cfg.Repo)
+	cfg.Base = strings.TrimSpace(cfg.Base)
 
 	if cfg.Owner == "" {
 		return config{}, errors.New("config: owner is required: set -owner or CIRCLE_PROJECT_USERNAME")
@@ -159,8 +182,19 @@ func loadUsers(file string, getenv func(string) string, readFile func(string) ([
 	if err := json.Unmarshal(raw, &parsed); err != nil {
 		return nil, fmt.Errorf("config: %s must be a JSON object of string to string: %w", source, err)
 	}
-	for k, v := range parsed {
-		users[strings.ToLower(k)] = v
+	keys := make([]string, 0, len(parsed))
+	for k := range parsed {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys) // deterministic collision message
+	seen := map[string]string{}
+	for _, k := range keys {
+		lk := strings.ToLower(k)
+		if prev, ok := seen[lk]; ok {
+			return nil, fmt.Errorf("config: %s has keys %q and %q that differ only by case", source, prev, k)
+		}
+		seen[lk] = k
+		users[lk] = parsed[k]
 	}
 	return users, nil
 }

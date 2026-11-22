@@ -17,6 +17,7 @@ type repoAPI interface {
 }
 
 type ticketLookup interface {
+	Check() error
 	TaskByCustomID(id string) (clickup.Task, error)
 }
 
@@ -101,6 +102,13 @@ func runSync(cfg config, gh repoAPI, cu ticketLookup, dc notifier, out io.Writer
 		inputs[i] = renderInput{
 			Owner: cfg.Owner, Repo: cfg.Repo, Base: cfg.Base, Group: g,
 			Users: cfg.Users, WillReset: !cfg.NoReset,
+		}
+	}
+	// A lookup reads any 4xx as "no such ticket", so first prove the token and
+	// team are good; otherwise a bad token would announce every ticket missing.
+	if slices.ContainsFunc(groups, func(g drift.Group) bool { return g.Kind == drift.KindTicket }) {
+		if err := cu.Check(); err != nil {
+			return rep, fmt.Errorf("sync: %w", err)
 		}
 	}
 	for i, g := range groups {

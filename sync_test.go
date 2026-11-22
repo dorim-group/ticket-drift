@@ -127,9 +127,16 @@ func (g *fakeGH) lose(target string, prs ...lostPR) {
 }
 
 type fakeCU struct {
-	tasks map[string]clickup.Task
-	errs  map[string]error
-	calls int
+	tasks    map[string]clickup.Task
+	errs     map[string]error
+	calls    int
+	checkErr error
+	checks   int
+}
+
+func (c *fakeCU) Check() error {
+	c.checks++
+	return c.checkErr
 }
 
 func (c *fakeCU) TaskByCustomID(id string) (clickup.Task, error) {
@@ -272,6 +279,9 @@ func TestSyncHappyPath(t *testing.T) {
 		t.Errorf("stage reset = %q, want not_needed", got)
 	}
 	postsBeforeUpdates(t, *e.events, 1)
+	if e.cu.checks != 1 {
+		t.Errorf("ClickUp checks = %d, want 1", e.cu.checks)
+	}
 	if !slices.Equal(*e.events, []string{"post **IT-1** · Task one", "update dev", "post " + wantSummary}) {
 		t.Errorf("events = %q", *e.events)
 	}
@@ -297,8 +307,8 @@ func TestSyncNothingLostResetsSilently(t *testing.T) {
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
-	if len(e.dc.posts) != 0 || e.cu.calls != 0 {
-		t.Errorf("posts = %d, ClickUp calls = %d, want 0 and 0", len(e.dc.posts), e.cu.calls)
+	if len(e.dc.posts) != 0 || e.cu.calls != 0 || e.cu.checks != 0 {
+		t.Errorf("posts = %d, ClickUp calls = %d, checks = %d, want none", len(e.dc.posts), e.cu.calls, e.cu.checks)
 	}
 	if want := []string{"dev=" + mainSHA}; !reflect.DeepEqual(e.gh.updates, want) {
 		t.Errorf("updates = %v, want %v", e.gh.updates, want)
@@ -399,6 +409,38 @@ func TestSyncClickUpDownStopsEverything(t *testing.T) {
 	}
 	if e.dc.attempts != 0 || len(e.gh.updates) != 0 {
 		t.Errorf("post attempts = %d, updates = %v; want none", e.dc.attempts, e.gh.updates)
+	}
+}
+
+func TestSyncClickUpCheckFailureStopsEverything(t *testing.T) {
+	e := newSyncEnv(t)
+	e.cu.checkErr = errors.New("clickup: check token: status 401")
+	e.gh.lose("dev", lostPR{1, "IT-1/a", "ann"})
+	e.gh.branches["stage"] = mainSHA
+
+	_, err := e.run()
+	if err == nil || !strings.Contains(err.Error(), "status 401") {
+		t.Fatalf("err = %v, want the ClickUp check error", err)
+	}
+	if e.dc.attempts != 0 || len(e.gh.updates) != 0 || e.cu.calls != 0 {
+		t.Errorf("post attempts = %d, updates = %v, lookups = %d; want none", e.dc.attempts, e.gh.updates, e.cu.calls)
+	}
+}
+
+// ClickUp is checked only when there is a ticket to look up.
+func TestSyncBranchWithoutTicketSkipsClickUp(t *testing.T) {
+	e := newSyncEnv(t)
+	e.gh.lose("dev", lostPR{1, "hotfix", "ann"})
+	e.gh.branches["stage"] = mainSHA
+
+	if _, err := e.run(); err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if e.cu.checks != 0 || e.cu.calls != 0 {
+		t.Errorf("checks = %d, lookups = %d; want 0 and 0", e.cu.checks, e.cu.calls)
+	}
+	if postsContaining(e.dc, "hotfix") != 1 {
+		t.Errorf("posts = %q, want one for hotfix", e.dc.posts)
 	}
 }
 

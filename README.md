@@ -87,6 +87,11 @@ One message per ticket, in Russian, posted before anything is reset:
 
 PR numbers link to the pull requests. A ticket ClickUp does not know is still
 reported, with «IT-12345 не найден в ClickUp» in place of the title and link.
+Every run verifies the ClickUp token and team (`CLICKUP_TEAM_ID`) before its
+first ticket lookup; if that check fails, the run stops with nothing posted
+and nothing reset. Once it has passed, any 4xx ClickUp gives for one ticket ID
+(it answers an unknown ID with 404 or 401) is taken as "not found", so a typo
+in a branch name is announced instead of blocking the reset.
 Branches with no ticket ID and commits that came without a pull request get
 messages of their own. If nothing is lost, nothing is posted.
 

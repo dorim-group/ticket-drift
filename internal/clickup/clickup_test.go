@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -60,19 +61,89 @@ func TestTaskNotFound(t *testing.T) {
 	}
 }
 
-func TestTaskUnauthorizedIsNotNotFound(t *testing.T) {
+// Once Check has proved the token and team, any 4xx for one task means
+// ClickUp will not give us that ID, whichever code it picks.
+func TestTask401IsNotFound(t *testing.T) {
 	var n atomic.Int32
 	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		n.Add(1)
 		w.WriteHeader(http.StatusUnauthorized)
-		_, _ = w.Write([]byte(`{"err":"Token invalid"}`))
+		_, _ = w.Write([]byte(`{"err":"Team not authorized","ECODE":"OAUTH_027"}`))
 	})
 	_, err := c.TaskByCustomID("IT-1")
-	if err == nil || errors.Is(err, ErrNotFound) {
-		t.Fatalf("err = %v, want non-NotFound error", err)
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
 	if n.Load() != 1 {
 		t.Errorf("requests = %d, want 1", n.Load())
+	}
+}
+
+func TestTaskEmptyIDIsError(t *testing.T) {
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"name":"x"}`))
+	})
+	_, err := c.TaskByCustomID("IT-1")
+	if err == nil || errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v, want a non-NotFound error", err)
+	}
+}
+
+func TestCheckOK(t *testing.T) {
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v2/team" {
+			t.Errorf("path = %q", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "tok" {
+			t.Errorf("Authorization = %q, want %q", got, "tok")
+		}
+		_, _ = w.Write([]byte(`{"teams":[{"id":"7","name":"Other"},{"id":"42","name":"Dorim"}]}`))
+	})
+	if err := c.Check(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCheckWrongTeam(t *testing.T) {
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"teams":[{"id":"7"}]}`))
+	})
+	err := c.Check()
+	if err == nil || !strings.Contains(err.Error(), "42") {
+		t.Fatalf("err = %v, want an error naming team 42", err)
+	}
+}
+
+func TestCheckUnauthorized(t *testing.T) {
+	var n atomic.Int32
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		n.Add(1)
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"err":"Token invalid","ECODE":"OAUTH_025"}`))
+	})
+	err := c.Check()
+	if err == nil || !strings.Contains(err.Error(), "401") {
+		t.Fatalf("err = %v, want a 401 error", err)
+	}
+	if n.Load() != 1 {
+		t.Errorf("requests = %d, want 1", n.Load())
+	}
+}
+
+func TestCheckRetries5xx(t *testing.T) {
+	var n atomic.Int32
+	c, slept := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if n.Add(1) == 1 {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		_, _ = w.Write([]byte(`{"teams":[{"id":"42"}]}`))
+	})
+	if err := c.Check(); err != nil {
+		t.Fatal(err)
+	}
+	if want := []time.Duration{time.Second}; !slices.Equal(*slept, want) {
+		t.Errorf("sleeps = %v, want %v", *slept, want)
 	}
 }
 

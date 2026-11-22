@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"sync/atomic"
 	"testing"
@@ -57,6 +58,34 @@ func TestUpdateRefForces(t *testing.T) {
 	}
 	if body != `{"sha":"abc","force":true}` {
 		t.Errorf("body = %s", body)
+	}
+}
+
+// Characters beyond "/" must reach GitHub percent-encoded, or a space, "%" or
+// "#" would cut or corrupt the ref; the assertions read the raw request URI.
+func TestRefPathsEscapeBranchNames(t *testing.T) {
+	var uris []string
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		uris = append(uris, r.Method+" "+r.RequestURI)
+		_, _ = w.Write([]byte(`{"object":{"sha":"abc"},"status":"ahead"}`))
+	})
+	const branch = "feat/a b%c#d"
+	if _, _, err := c.BranchSHA("o", "r", branch); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.UpdateRef("o", "r", branch, "abc"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.CompareStatus("o", "r", "main", branch); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"GET /repos/o/r/git/ref/heads/feat/a%20b%25c%23d",
+		"PATCH /repos/o/r/git/refs/heads/feat/a%20b%25c%23d",
+		"GET /repos/o/r/compare/main...feat/a%20b%25c%23d?per_page=1",
+	}
+	if !slices.Equal(uris, want) {
+		t.Errorf("request URIs = %q, want %q", uris, want)
 	}
 }
 

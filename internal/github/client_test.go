@@ -1,12 +1,16 @@
 package github
 
 import (
+	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -192,6 +196,139 @@ func TestTokenClientSendsBearer(t *testing.T) {
 	}
 	if ua != "ticket-drift" {
 		t.Errorf("User-Agent = %q, want ticket-drift", ua)
+	}
+}
+
+// appServer answers the token mint with a token expiring after life, counts
+// mints and records the mint request's Authorization header.
+type appServer struct {
+	mu        sync.Mutex
+	mints     int
+	mintAuths []string
+	mintDelay time.Duration
+	life      time.Duration
+	expiresAt func() time.Time
+}
+
+func (s *appServer) handler(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/app/installations/7/access_tokens" {
+		time.Sleep(s.mintDelay)
+		s.mu.Lock()
+		s.mints++
+		n := s.mints
+		s.mintAuths = append(s.mintAuths, r.Header.Get("Authorization"))
+		s.mu.Unlock()
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"token":      fmt.Sprintf("ghs_%d", n),
+			"expires_at": s.expiresAt().Format(time.RFC3339),
+		})
+		return
+	}
+	_, _ = w.Write([]byte(`{"object":{"sha":"abc"}}`))
+}
+
+func newAppTestClient(t *testing.T, s *appServer) (*Client, *rsa.PrivateKey) {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pemKey := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+	srv := httptest.NewServer(http.HandlerFunc(s.handler))
+	t.Cleanup(srv.Close)
+	c, err := NewAppClient("1", "7", pemKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.BaseURL = srv.URL
+	c.Sleep = func(time.Duration) {}
+	return c, key
+}
+
+func TestAppJWTContents(t *testing.T) {
+	now := time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC)
+	s := &appServer{expiresAt: func() time.Time { return now.Add(time.Hour) }}
+	c, key := newAppTestClient(t, s)
+	c.now = func() time.Time { return now }
+	if _, _, err := c.BranchSHA("o", "r", "dev"); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.mintAuths) != 1 || !strings.HasPrefix(s.mintAuths[0], "Bearer ") {
+		t.Fatalf("mint Authorization = %q, want one Bearer JWT", s.mintAuths)
+	}
+	parts := strings.Split(strings.TrimPrefix(s.mintAuths[0], "Bearer "), ".")
+	if len(parts) != 3 {
+		t.Fatalf("JWT has %d parts, want 3", len(parts))
+	}
+	sig, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256([]byte(parts[0] + "." + parts[1]))
+	if err := rsa.VerifyPKCS1v15(&key.PublicKey, crypto.SHA256, digest[:], sig); err != nil {
+		t.Errorf("signature does not verify with the App's public key: %v", err)
+	}
+	var header struct{ Alg string }
+	var claims struct {
+		Iss      string
+		Iat, Exp int64
+	}
+	for i, v := range []any{&header, &claims} {
+		raw, err := base64.RawURLEncoding.DecodeString(parts[i])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(raw, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if header.Alg != "RS256" {
+		t.Errorf("alg = %q, want RS256", header.Alg)
+	}
+	if claims.Iss != "1" {
+		t.Errorf("iss = %q, want the App ID 1", claims.Iss)
+	}
+	if exp := time.Unix(claims.Exp, 0); !exp.After(now) || exp.After(now.Add(10*time.Minute)) {
+		t.Errorf("exp = %v, want after %v and within 10 minutes", exp, now)
+	}
+	if iat := time.Unix(claims.Iat, 0); iat.After(now) {
+		t.Errorf("iat = %v, want not after %v", iat, now)
+	}
+}
+
+func TestAppClientRemintsExpiredToken(t *testing.T) {
+	now := time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC)
+	s := &appServer{expiresAt: func() time.Time { return now.Add(time.Hour) }}
+	c, _ := newAppTestClient(t, s)
+	clock := now
+	c.now = func() time.Time { return clock }
+	for _, at := range []time.Duration{0, 30 * time.Minute, 2 * time.Hour} {
+		clock = now.Add(at)
+		if _, _, err := c.BranchSHA("o", "r", "dev"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if s.mints != 2 {
+		t.Errorf("mints = %d, want 2: one at start, one after the token expired", s.mints)
+	}
+}
+
+// Concurrent calls share one installation token: the cache is guarded, and a
+// mint in flight is waited for rather than repeated.
+func TestAppClientConcurrentCallsMintOnce(t *testing.T) {
+	s := &appServer{mintDelay: 50 * time.Millisecond, expiresAt: func() time.Time { return time.Now().Add(time.Hour) }}
+	c, _ := newAppTestClient(t, s)
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(func() {
+			if _, _, err := c.BranchSHA("o", "r", "dev"); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	wg.Wait()
+	if s.mints != 1 {
+		t.Errorf("mints = %d, want 1", s.mints)
 	}
 }
 

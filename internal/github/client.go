@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 )
@@ -45,6 +46,9 @@ type Client struct {
 
 	now func() time.Time // swappable so tests can pin JWT timestamps
 
+	// mu guards token and tokenExp, and is held across a mint so concurrent
+	// callers wait for one token instead of each minting their own.
+	mu       sync.Mutex
 	token    string // static for NewTokenClient, minted for App auth
 	tokenExp time.Time
 	static   bool
@@ -113,13 +117,13 @@ func parsePrivateKey(pemKey []byte) (*rsa.PrivateKey, error) {
 	if k, err := x509.ParsePKCS1PrivateKey(block.Bytes); err == nil {
 		return k, nil
 	}
-	any, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
 	if err != nil {
 		return nil, fmt.Errorf("github: parse private key: %w", err)
 	}
-	k, ok := any.(*rsa.PrivateKey)
+	k, ok := parsed.(*rsa.PrivateKey)
 	if !ok {
-		return nil, fmt.Errorf("github: private key is %T, want RSA", any)
+		return nil, fmt.Errorf("github: private key is %T, want RSA", parsed)
 	}
 	return k, nil
 }
@@ -157,6 +161,8 @@ func appJWT(appID string, key *rsa.PrivateKey, now time.Time) (string, error) {
 }
 
 func (c *Client) installationToken() (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.static {
 		return c.token, nil
 	}

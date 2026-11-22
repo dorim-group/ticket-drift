@@ -13,7 +13,9 @@ type walkResult struct {
 	Carriers     []string      // SHAs
 	Unattributed []Commit
 
-	attributed map[string]int // commit SHA -> number of the PR found for it, whatever its class
+	// attributed maps a commit to the PR found for it, whatever its class, so
+	// the tests can prove every walked commit is accounted for.
+	attributed map[string]int
 }
 
 var (

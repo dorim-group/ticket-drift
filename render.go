@@ -4,14 +4,16 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"unicode/utf16"
 	"unicode/utf8"
 
 	"github.com/dorim-group/ticket-drift/internal/clickup"
 	"github.com/dorim-group/ticket-drift/internal/drift"
 )
 
-// Discord rejects content over 2000 characters; stay below it.
-const maxMessageRunes = 1900
+// Discord rejects content over 2000 characters, which it counts in UTF-16
+// code units; stay below it.
+const maxMessageUnits = 1900
 
 const (
 	maxTitleRunes     = 200
@@ -19,6 +21,8 @@ const (
 	maxStatusRunes    = 100
 	maxURLRunes       = 300
 	maxCommitMsgRunes = 80
+	maxNameRunes      = 100 // repo, base and each target name in the reset line
+	maxResetTargets   = 5
 	shortSHALength    = 7
 	ghostMention      = "@ghost"
 	droppedItemsFmt   = "…и ещё %d"
@@ -35,11 +39,13 @@ type renderInput struct {
 }
 
 func renderGroup(in renderInput) (content string, mentionIDs []string) {
-	in.Group.Key = cutRunes(in.Group.Key, maxKeyRunes, "…")
+	in.Group.Key = cutRunes(oneLine(in.Group.Key), maxKeyRunes, "…")
 	head := headerLines(in)
-	items := make([]string, len(in.Group.Items))
-	for i, it := range in.Group.Items {
-		items[i] = itemLine(in, it)
+	var items []string
+	for _, it := range in.Group.Items {
+		if it.PR != nil || it.Commit != nil { // an empty item has nothing to show
+			items = append(items, itemLine(in, it))
+		}
 	}
 	mentions := mentionParts(in)
 
@@ -47,7 +53,7 @@ func renderGroup(in renderInput) (content string, mentionIDs []string) {
 		parts := append(slices.Clone(head), shown...)
 		return strings.Join(append(parts, mentionText(m, ellipsis)), "\n")
 	}
-	fits := func(s string) bool { return utf8.RuneCountInString(s) <= maxMessageRunes }
+	fits := func(s string) bool { return discordLen(s) <= maxMessageUnits }
 
 	content = build(items, mentions, false)
 	if !fits(content) {
@@ -59,7 +65,10 @@ func renderGroup(in renderInput) (content string, mentionIDs []string) {
 		}
 		// Every item is gone and the message is still too long: the mentions
 		// line is the only unbounded part left, so shorten it.
-		shown := []string{fmt.Sprintf(droppedItemsFmt, len(items))}
+		var shown []string
+		if len(items) > 0 {
+			shown = []string{fmt.Sprintf(droppedItemsFmt, len(items))}
+		}
 		for k := len(mentions) - 1; k >= 0; k-- {
 			if content = build(shown, mentions[:k], true); fits(content) {
 				return content, idsOf(mentions[:k])
@@ -101,6 +110,7 @@ func resetLine(in renderInput) string {
 	targets := in.Group.Targets()
 	many := len(targets) > 1
 	ticket := in.Group.Kind == drift.KindTicket
+	repo, base := cutRunes(in.Repo, maxNameRunes, "…"), cutRunes(in.Base, maxNameRunes, "…")
 	pick := func(one, several string) string {
 		if many {
 			return several
@@ -113,7 +123,7 @@ func resetLine(in renderInput) string {
 			what = "Тикет"
 		}
 		return fmt.Sprintf("`%s`: %s %s до %s. %s нужно задеплоить заново.",
-			in.Repo, boldJoin(targets), pick("выровнен", "выровнены"), in.Base, what)
+			repo, targetList(targets), pick("выровнен", "выровнены"), base, what)
 	}
 	var fate string
 	switch {
@@ -129,7 +139,23 @@ func resetLine(in renderInput) string {
 		}
 	}
 	return fmt.Sprintf("`%s`: %s %s до %s при следующем сбросе. %s",
-		in.Repo, boldJoin(targets), pick("будет выровнен", "будут выровнены"), in.Base, fate)
+		repo, targetList(targets), pick("будет выровнен", "будут выровнены"), base, fate)
+}
+
+// targetList bolds the first maxResetTargets target names, each capped, and
+// marks any further ones with "…".
+func targetList(targets []string) string {
+	shown := make([]string, 0, min(len(targets), maxResetTargets))
+	for _, t := range targets[:min(len(targets), maxResetTargets)] {
+		shown = append(shown, cutRunes(t, maxNameRunes, "…"))
+	}
+	if len(targets) <= maxResetTargets {
+		return boldJoin(shown)
+	}
+	for i, t := range shown {
+		shown[i] = "**" + t + "**"
+	}
+	return strings.Join(shown, ", ") + ", …"
 }
 
 func itemLine(in renderInput, it drift.Item) string {
@@ -162,7 +188,7 @@ func mentionParts(in renderInput) []mention {
 		}
 	}
 	for _, n := range in.Group.Names {
-		out = append(out, mention{text: n})
+		out = append(out, mention{text: oneLine(n)})
 	}
 	if len(out) == 0 {
 		out = []mention{{text: ghostMention}}
@@ -222,6 +248,20 @@ func shortSHA(sha string) string {
 		return sha[:shortSHALength]
 	}
 	return sha
+}
+
+// oneLine turns each line break in a git author name into a space, so the
+// name cannot split a line and the mentions stay on the last one.
+var oneLine = strings.NewReplacer("\r\n", " ", "\r", " ", "\n", " ").Replace
+
+// discordLen counts s as Discord does, in UTF-16 code units: a character
+// outside the Basic Multilingual Plane, such as most emoji, counts as two.
+func discordLen(s string) int {
+	n := 0
+	for _, r := range s {
+		n += utf16.RuneLen(r)
+	}
+	return n
 }
 
 // cutRunes cuts s to max runes and appends suffix only when it cut.

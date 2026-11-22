@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"unicode/utf16"
 	"unicode/utf8"
 
 	"github.com/dorim-group/ticket-drift/internal/clickup"
@@ -208,7 +209,7 @@ func TestRenderManyItemsFitsLimit(t *testing.T) {
 	}
 	in := baseInput(g)
 	got, _ := renderGroup(in)
-	if n := utf8.RuneCountInString(got); n > maxMessageRunes {
+	if n := utf8.RuneCountInString(got); n > maxMessageUnits {
 		t.Errorf("%d runes", n)
 	}
 	l := lines(got)
@@ -253,7 +254,7 @@ func TestRenderManyMentionsFitsLimit(t *testing.T) {
 		in.Users[login] = fmt.Sprintf("%018d", 100000000000000000+i)
 	}
 	got, ids := renderGroup(in)
-	if n := utf8.RuneCountInString(got); n > maxMessageRunes {
+	if n := utf8.RuneCountInString(got); n > maxMessageUnits {
 		t.Errorf("%d runes", n)
 	}
 	l := lines(got)
@@ -275,7 +276,7 @@ func TestRenderLongStatusAndKeyCapped(t *testing.T) {
 	in := baseInput(ticketGroup("bob"))
 	in.Task = &clickup.Task{Name: "N", URL: "https://x/t/1", Status: strings.Repeat("с", 3000)}
 	got, _ := renderGroup(in)
-	if n := utf8.RuneCountInString(got); n > maxMessageRunes {
+	if n := utf8.RuneCountInString(got); n > maxMessageUnits {
 		t.Errorf("%d runes", n)
 	}
 	if want := "https://x/t/1 · статус в ClickUp: " + strings.Repeat("с", 100) + "…"; lines(got)[1] != want {
@@ -284,7 +285,7 @@ func TestRenderLongStatusAndKeyCapped(t *testing.T) {
 	g := drift.Group{Kind: drift.KindBranch, Key: strings.Repeat("k", 3000), Logins: []string{"bob"},
 		Items: []drift.Item{pr("dev", 1, "b")}}
 	got, _ = renderGroup(baseInput(g))
-	if n := utf8.RuneCountInString(got); n > maxMessageRunes {
+	if n := utf8.RuneCountInString(got); n > maxMessageUnits {
 		t.Errorf("%d runes", n)
 	}
 }
@@ -302,6 +303,98 @@ func TestRenderCaseOnlyDuplicateLoginShownOnce(t *testing.T) {
 	l, _ := lastLine(baseInput(ticketGroup("Carol", "carol")))
 	if l != "@Carol" {
 		t.Errorf("last = %q", l)
+	}
+}
+
+// discordUnits counts s as Discord does, in UTF-16 code units.
+func discordUnits(s string) int { return len(utf16.Encode([]rune(s))) }
+
+func TestRenderResetLineCapped(t *testing.T) {
+	g := ticketGroup("bob")
+	g.Items = nil
+	for _, name := range []string{"t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8"} {
+		g.Items = append(g.Items, pr(name, 1, "IT-5/x"))
+	}
+	in := baseInput(g)
+	in.Repo, in.Base = strings.Repeat("r", 3000), strings.Repeat("b", 3000)
+	got, _ := renderGroup(in)
+	if n := discordUnits(got); n > maxMessageUnits {
+		t.Errorf("%d UTF-16 units, want at most %d", n, maxMessageUnits)
+	}
+	want := "`" + strings.Repeat("r", 100) + "…`: **t1**, **t2**, **t3**, **t4**, **t5**, … выровнены до " +
+		strings.Repeat("b", 100) + "…. Тикет нужно задеплоить заново."
+	if l := lines(got)[1]; l != want {
+		t.Errorf("reset line = %q\nwant %q", l, want)
+	}
+}
+
+func TestRenderResetLineCapsTargetNames(t *testing.T) {
+	g := ticketGroup("bob")
+	g.Items = []drift.Item{pr(strings.Repeat("d", 3000), 1, "IT-5/x")}
+	got, _ := renderGroup(baseInput(g))
+	if want := "`r`: **" + strings.Repeat("d", 100) + "…** выровнен до main. Тикет нужно задеплоить заново."; lines(got)[1] != want {
+		t.Errorf("reset line = %q", lines(got)[1])
+	}
+}
+
+// A group with nothing to list never claims it dropped something.
+func TestRenderNoDroppedMarkerWithoutItems(t *testing.T) {
+	in := baseInput(drift.Group{Kind: drift.KindCommits, Key: "ann"})
+	for i := 0; i < 400; i++ {
+		login := fmt.Sprintf("user%d", i)
+		in.Group.Logins = append(in.Group.Logins, login)
+		in.Users[login] = fmt.Sprintf("%018d", 100000000000000000+i)
+	}
+	got, _ := renderGroup(in)
+	if strings.Contains(got, "…и ещё") {
+		t.Errorf("content has a dropped-items marker:\n%s", got)
+	}
+	if n := discordUnits(got); n > maxMessageUnits {
+		t.Errorf("%d UTF-16 units", n)
+	}
+}
+
+func TestRenderSkipsEmptyItem(t *testing.T) {
+	g := ticketGroup("bob")
+	g.Items = []drift.Item{{Target: "dev"}, pr("dev", 1, "IT-5/x")}
+	got, _ := renderGroup(baseInput(g))
+	want := "**IT-5**\n" +
+		"`r`: **dev** выровнен до main. Тикет нужно задеплоить заново.\n" +
+		"dev — [#1](https://github.com/o/r/pull/1) `IT-5/x`\n" +
+		"@bob"
+	if got != want {
+		t.Errorf("got %q\nwant %q", got, want)
+	}
+}
+
+func TestRenderNameWithLineBreaks(t *testing.T) {
+	g := drift.Group{Kind: drift.KindCommits, Key: "Old\r\nDev", Names: []string{"Old\r\nDev", "New\nDev"},
+		Items: []drift.Item{{Target: "dev", Commit: &drift.Commit{SHA: "abc1234def", Message: "m"}}}}
+	got, _ := renderGroup(baseInput(g))
+	l := lines(got)
+	if len(l) != 4 || l[0] != "**Коммиты без PR** · Old Dev" || l[3] != "Old Dev New Dev" {
+		t.Errorf("lines = %q", l)
+	}
+	if strings.Contains(got, "\r") {
+		t.Errorf("content keeps a CR: %q", got)
+	}
+}
+
+// Discord counts UTF-16 code units: 200 emoji are 400 of them, which a rune
+// count would see as 200.
+func TestRenderAstralTitleFitsLimit(t *testing.T) {
+	in := baseInput(ticketGroup("bob"))
+	in.Task = &clickup.Task{Name: strings.Repeat("😀", 200), URL: "u", Status: "s"}
+	in.Group.Items = nil
+	for i := 0; i < 60; i++ {
+		in.Group.Items = append(in.Group.Items, pr("dev", 1000+i, "IT-5/"+strings.Repeat("long-branch-name", 3)))
+	}
+	got, _ := renderGroup(in)
+	if n := discordUnits(got); n > maxMessageUnits {
+		t.Errorf("%d UTF-16 units, want at most %d", n, maxMessageUnits)
+	}
+	if want := "**IT-5** · " + strings.Repeat("😀", 200); lines(got)[0] != want {
+		t.Errorf("title line cut: %q", lines(got)[0])
 	}
 }
 

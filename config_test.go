@@ -89,6 +89,28 @@ func TestConfigDiscordOptionalOnlyInDryRun(t *testing.T) {
 	}
 }
 
+func TestConfigDiscordFallsBackToSharedWebhook(t *testing.T) {
+	env := baseEnv()
+	delete(env, "DISCORD_WEBHOOK_URL")
+	env["DISCORD_WEBHOOK"] = "https://discord.example/shared"
+	cfg, err := parse(t, env, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DiscordWebhook != "https://discord.example/shared" {
+		t.Errorf("DiscordWebhook = %q", cfg.DiscordWebhook)
+	}
+
+	env["DISCORD_WEBHOOK_URL"] = "https://discord.example/own"
+	cfg, err = parse(t, env, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DiscordWebhook != "https://discord.example/own" {
+		t.Errorf("DiscordWebhook = %q, want the tool's own variable to win", cfg.DiscordWebhook)
+	}
+}
+
 func TestConfigGitHubTokenOrApp(t *testing.T) {
 	env := baseEnv()
 	delete(env, "GITHUB_TOKEN")

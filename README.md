@@ -73,7 +73,7 @@ would print:
 | `TICKET_DRIFT_APP_ID` | GitHub App ID |
 | `TICKET_DRIFT_APP_INSTALLATION_ID` | installation ID (the number at the end of the install URL) |
 | `TICKET_DRIFT_APP_PRIVATE_KEY` | the App's PEM, base64-encoded so it survives an env var |
-| `DISCORD_WEBHOOK_URL` | channel webhook. Required unless `-dry-run` |
+| `DISCORD_WEBHOOK_URL` | channel webhook. Required unless `-dry-run`. If unset, `DISCORD_WEBHOOK` — the variable the repos' CircleCI contexts already carry for deploy notifications — is used |
 | `TICKET_DRIFT_USERS` | JSON object `{"github-login": "discord-user-id"}` |
 | `CLICKUP_API_TOKEN`, `CLICKUP_TEAM_ID` | required in every mode, including `-dry-run`; the run refuses to start without them |
 

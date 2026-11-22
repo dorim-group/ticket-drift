@@ -122,9 +122,15 @@ func parseConfig(args []string, getenv func(string) string, readFile func(string
 		}
 	}
 
+	// DISCORD_WEBHOOK is the name the repos' CircleCI contexts already carry
+	// for their deploy notifications; falling back to it lets a job reuse that
+	// channel without a new variable.
 	cfg.DiscordWebhook = getenv("DISCORD_WEBHOOK_URL")
+	if cfg.DiscordWebhook == "" {
+		cfg.DiscordWebhook = getenv("DISCORD_WEBHOOK")
+	}
 	if cfg.DiscordWebhook == "" && !cfg.DryRun {
-		return config{}, errors.New("config: DISCORD_WEBHOOK_URL is required unless -dry-run is set")
+		return config{}, errors.New("config: DISCORD_WEBHOOK_URL (or DISCORD_WEBHOOK) is required unless -dry-run is set")
 	}
 
 	cfg.Users, err = loadUsers(usersFile, getenv, readFile)

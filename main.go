@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime/debug"
 
 	"github.com/dorim-group/ticket-drift/internal/clickup"
 	"github.com/dorim-group/ticket-drift/internal/discord"
@@ -22,11 +23,13 @@ usage: ticket-drift <command> [flags]
 commands:
   sync     tell authors of work on dev/stage missing from main, then reset dev and stage to main
   version  print version and exit
+  help     print this help and exit
 
 Run "ticket-drift sync -h" for the flags of a command.
 `
 
 func main() {
+	version = resolveVersion(version, debug.ReadBuildInfo)
 	if len(os.Args) < 2 {
 		fmt.Fprintf(os.Stderr, usageText, version, commit)
 		os.Exit(2)
@@ -44,6 +47,18 @@ func main() {
 		fmt.Fprintf(os.Stderr, usageText, version, commit)
 		os.Exit(2)
 	}
+}
+
+// resolveVersion falls back to the module version Go records for
+// "go install …@vX", which sets no -ldflags. A local build records "(devel)".
+func resolveVersion(stamped string, read func() (*debug.BuildInfo, bool)) string {
+	if stamped != "dev" {
+		return stamped
+	}
+	if info, ok := read(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return info.Main.Version
+	}
+	return stamped
 }
 
 func cmdSync(args []string) {

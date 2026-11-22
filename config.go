@@ -85,6 +85,9 @@ func parseConfig(args []string, getenv func(string) string, readFile func(string
 	if cfg.Repo == "" {
 		return config{}, errors.New("config: repo is required: set -repo or CIRCLE_PROJECT_REPONAME")
 	}
+	if cfg.Base == "" {
+		return config{}, errors.New("config: -base must not be empty")
+	}
 
 	for _, t := range strings.Split(targets, ",") {
 		// A repeated target would be walked, reported and reset twice.

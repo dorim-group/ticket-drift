@@ -221,6 +221,15 @@ func TestConfigBaseAmongTargets(t *testing.T) {
 	}
 }
 
+func TestConfigEmptyBase(t *testing.T) {
+	for _, v := range []string{"", "  "} {
+		_, err := parse(t, baseEnv(), nil, "-base", v)
+		if err == nil || !strings.Contains(err.Error(), "-base") {
+			t.Errorf("-base %q: err = %v, want an error naming -base", v, err)
+		}
+	}
+}
+
 func TestConfigBadPattern(t *testing.T) {
 	if _, err := parse(t, baseEnv(), nil, "-ticket-pattern", "("); err == nil {
 		t.Fatal("want error")
@@ -246,6 +255,9 @@ func TestConfigHelp(t *testing.T) {
 		}
 	}
 	for _, k := range []string{"GITHUB_TOKEN", "DISCORD_WEBHOOK_URL", "CLICKUP_API_TOKEN"} {
+		if env[k] == "" {
+			t.Fatalf("baseEnv has no %s, so the leak check would pass vacuously", k)
+		}
 		if strings.Contains(he.Usage, env[k]) {
 			t.Errorf("usage leaks %s", k)
 		}

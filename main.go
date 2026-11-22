@@ -5,6 +5,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"runtime/debug"
 
@@ -71,12 +72,20 @@ func cmdSync(args []string) {
 		}
 		fail(err)
 	}
+	if err := syncCommand(cfg, os.Stdout); err != nil {
+		fail(err)
+	}
+}
 
+// syncCommand builds the clients, runs the sync and writes the report. The
+// returned error fails the run.
+func syncCommand(cfg config, out io.Writer) error {
 	var gh *github.Client
+	var err error
 	if cfg.GitHubToken != "" {
 		gh = github.NewTokenClient(cfg.GitHubToken)
 	} else if gh, err = github.NewAppClient(cfg.AppID, cfg.AppInstallationID, cfg.AppKey); err != nil {
-		fail(err)
+		return withReport(cfg, newReport(cfg), err)
 	}
 	var dc notifier = noNotifier{}
 	if !cfg.DryRun {
@@ -86,16 +95,19 @@ func cmdSync(args []string) {
 	rep, runErr := runSync(cfg,
 		github.RepoSource{C: gh, Owner: cfg.Owner, Repo: cfg.Repo},
 		clickup.New(cfg.ClickUpToken, cfg.ClickUpTeamID),
-		dc, os.Stdout)
-	// The report is written on failure too: it says how far the run got.
+		dc, out)
+	return withReport(cfg, rep, runErr)
+}
+
+// withReport writes rep when -out-json is set, on failure too: it says how
+// far the run got.
+func withReport(cfg config, rep report, runErr error) error {
 	if cfg.OutJSON != "" {
 		if err := writeReport(cfg.OutJSON, rep); err != nil {
-			runErr = errors.Join(runErr, err)
+			return errors.Join(runErr, err)
 		}
 	}
-	if runErr != nil {
-		fail(runErr)
-	}
+	return runErr
 }
 
 func fail(err error) {

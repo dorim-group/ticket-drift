@@ -617,6 +617,47 @@ func TestSyncNoCorrectionForUnannouncedTarget(t *testing.T) {
 	}
 }
 
+// An aborted reset is corrected only on a branch a message said was reset.
+func TestSyncNoCorrectionForUnannouncedAbortedTarget(t *testing.T) {
+	e := newSyncEnv(t)
+	e.gh.lose("dev", lostPR{1, "IT-1/a", "ann"})
+	e.gh.branches["stage"] = "0000000stg" // nothing on it is lost, so no message names it
+	e.gh.afterSnapshot = func(g *fakeGH) {
+		g.branches["stage"] = "stage-newer"
+		g.status[mainSHA+"...stage-newer"] = "diverged"
+	}
+
+	r, err := e.run()
+	if err == nil || !strings.Contains(err.Error(), "stage") {
+		t.Fatalf("err = %v, want an error for the stage reset", err)
+	}
+	if got := targetOf(t, r, "stage").Reset.Outcome; got != "aborted_moved" {
+		t.Errorf("stage reset = %q, want aborted_moved", got)
+	}
+	if n := postsContaining(e.dc, "НЕ выровнена"); n != 0 {
+		t.Errorf("posts = %q, want no correction", e.dc.posts)
+	}
+	if want := []string{"dev=" + mainSHA}; !reflect.DeepEqual(e.gh.updates, want) {
+		t.Errorf("updates = %v, want %v", e.gh.updates, want)
+	}
+}
+
+// GitHub answers 404 alike for a missing branch, a missing repository and an
+// App that is not installed, so the message names all three.
+func TestSyncBaseNotFoundNamesRepoAndAccess(t *testing.T) {
+	e := newSyncEnv(t)
+	delete(e.gh.branches, "main")
+	_, err := e.run()
+	if err == nil {
+		t.Fatal("err = nil, want an error")
+	}
+	for _, want := range []string{`"main"`, "o/r", "not accessible to these credentials"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("err = %v, want it to contain %s", err, want)
+		}
+	}
+}
+
 func TestResetTargetFailsWhenReReadFails(t *testing.T) {
 	gh := newFakeGH(&[]string{})
 	gh.branches["dev"] = "0000000dev"

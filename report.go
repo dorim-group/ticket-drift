@@ -69,6 +69,15 @@ type groupReport struct {
 	Posted       bool     `json:"posted"`
 }
 
+// newReport is the report of a run that has not started: no targets, no groups.
+func newReport(cfg config) report {
+	return report{
+		Version: version, Owner: cfg.Owner, Repo: cfg.Repo, Base: cfg.Base,
+		DryRun: cfg.DryRun, NoReset: cfg.NoReset,
+		Targets: []targetReport{}, Groups: []groupReport{},
+	}
+}
+
 func newTargetReport(name string) targetReport {
 	return targetReport{
 		Name:         name,

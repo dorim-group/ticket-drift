@@ -43,11 +43,7 @@ var correctionReasons = map[string]string{
 // runSync performs every phase. The returned report is filled as far as the
 // run got, even when err != nil.
 func runSync(cfg config, gh repoAPI, cu ticketLookup, dc notifier, out io.Writer) (report, error) {
-	rep := report{
-		Version: version, Owner: cfg.Owner, Repo: cfg.Repo, Base: cfg.Base,
-		DryRun: cfg.DryRun, NoReset: cfg.NoReset,
-		Targets: []targetReport{}, Groups: []groupReport{},
-	}
+	rep := newReport(cfg)
 
 	// 1. Snapshot: everything after works on these pinned SHAs.
 	baseSHA, found, err := gh.BranchSHA(cfg.Base)
@@ -55,7 +51,10 @@ func runSync(cfg config, gh repoAPI, cu ticketLookup, dc notifier, out io.Writer
 		return rep, fmt.Errorf("sync: read %s: %w", cfg.Base, err)
 	}
 	if !found {
-		return rep, fmt.Errorf("sync: base branch %q does not exist", cfg.Base)
+		// GitHub answers 404 alike for a missing branch, a missing repository
+		// and an App that is not installed on it.
+		return rep, fmt.Errorf("sync: base branch %q not found in %s/%s, or the repository is not accessible to these credentials",
+			cfg.Base, cfg.Owner, cfg.Repo)
 	}
 	rep.BaseSHA = baseSHA
 	for _, name := range cfg.Targets {

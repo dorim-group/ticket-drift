@@ -48,7 +48,7 @@ func TestTaskByCustomID(t *testing.T) {
 
 func TestTaskNotFound(t *testing.T) {
 	var n atomic.Int32
-	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	c, slept := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		n.Add(1)
 		w.WriteHeader(http.StatusNotFound)
 	})
@@ -58,6 +58,69 @@ func TestTaskNotFound(t *testing.T) {
 	}
 	if n.Load() != 1 {
 		t.Errorf("requests = %d, want 1", n.Load())
+	}
+	if len(*slept) != 0 {
+		t.Errorf("sleeps = %v, want none", *slept)
+	}
+}
+
+func TestTaskRetries429(t *testing.T) {
+	var n atomic.Int32
+	c, slept := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if n.Add(1) == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"a","custom_id":"IT-1","name":"n","url":"u","status":{"status":"s"}}`))
+	})
+	if _, err := c.TaskByCustomID("IT-1"); err != nil {
+		t.Fatal(err)
+	}
+	if n.Load() != 2 {
+		t.Errorf("requests = %d, want 2", n.Load())
+	}
+	if want := []time.Duration{time.Second}; !slices.Equal(*slept, want) {
+		t.Errorf("sleeps = %v, want %v", *slept, want)
+	}
+}
+
+func TestTaskRetriesTransportError(t *testing.T) {
+	var n atomic.Int32
+	c, slept := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if n.Add(1) == 1 {
+			conn, _, err := w.(http.Hijacker).Hijack()
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			_ = conn.Close() // the client sees a broken connection
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"a","custom_id":"IT-1","name":"n","url":"u","status":{"status":"s"}}`))
+	})
+	if _, err := c.TaskByCustomID("IT-1"); err != nil {
+		t.Fatal(err)
+	}
+	if n.Load() != 2 || len(*slept) != 1 {
+		t.Errorf("requests = %d, sleeps = %v; want 2 and one", n.Load(), *slept)
+	}
+}
+
+func TestTaskGiveUpNamesLastStatus(t *testing.T) {
+	var n atomic.Int32
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if n.Add(1) < 4 {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		w.WriteHeader(http.StatusTooManyRequests)
+	})
+	_, err := c.TaskByCustomID("IT-1")
+	if err == nil || !strings.Contains(err.Error(), "status 429") || strings.Contains(err.Error(), "502") {
+		t.Errorf("err = %v, want it to name the last status, 429", err)
+	}
+	if errors.Is(err, ErrNotFound) {
+		t.Errorf("err = %v, must not read as not found", err)
 	}
 }
 

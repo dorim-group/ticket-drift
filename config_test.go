@@ -171,21 +171,21 @@ func TestConfigUsersInvalidJSON(t *testing.T) {
 
 func TestConfigUsersLowercased(t *testing.T) {
 	env := baseEnv()
-	env["TICKET_DRIFT_USERS"] = `{"Bob":"111"}`
+	env["TICKET_DRIFT_USERS"] = `{"Bob":"111111111111111111"}`
 	cfg, err := parse(t, env, nil)
-	if err != nil || cfg.Users["bob"] != "111" {
+	if err != nil || cfg.Users["bob"] != "111111111111111111" {
 		t.Fatalf("users=%v err=%v", cfg.Users, err)
 	}
 }
 
 func TestConfigUsersFileOverridesEnv(t *testing.T) {
 	env := baseEnv()
-	env["TICKET_DRIFT_USERS"] = `{"env":"1"}`
-	cfg, err := parse(t, env, map[string]string{"u.json": `{"File":"2"}`}, "-users", "u.json")
+	env["TICKET_DRIFT_USERS"] = `{"env":"111111111111111111"}`
+	cfg, err := parse(t, env, map[string]string{"u.json": `{"File":"222222222222222222"}`}, "-users", "u.json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(cfg.Users, map[string]string{"file": "2"}) {
+	if !reflect.DeepEqual(cfg.Users, map[string]string{"file": "222222222222222222"}) {
 		t.Errorf("users = %v", cfg.Users)
 	}
 	if _, err := parse(t, env, nil, "-users", "missing.json"); err == nil {
@@ -248,9 +248,20 @@ func TestConfigWhitespaceSecretIsMissing(t *testing.T) {
 
 func TestConfigUsersCaseCollision(t *testing.T) {
 	env := baseEnv()
-	env["TICKET_DRIFT_USERS"] = `{"Bob":"1","bob":"2"}`
+	env["TICKET_DRIFT_USERS"] = `{"Bob":"111111111111111111","bob":"222222222222222222"}`
 	_, err := parse(t, env, nil)
 	if err == nil || !strings.Contains(err.Error(), `"Bob"`) || !strings.Contains(err.Error(), `"bob"`) {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// Discord rejects the whole message for a non-snowflake in allowed_mentions,
+// which would block every reset; catch it before any network use.
+func TestConfigUsersRejectsNonSnowflake(t *testing.T) {
+	env := baseEnv()
+	env["TICKET_DRIFT_USERS"] = `{"bob":"@bob"}`
+	_, err := parse(t, env, nil)
+	if err == nil || !strings.Contains(err.Error(), "bob") {
+		t.Fatalf("err = %v, want an error naming bob", err)
 	}
 }

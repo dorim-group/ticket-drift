@@ -111,6 +111,10 @@ posts. Only the mapped users can be pinged, so a branch name or ticket title
 can never trigger `@everyone`. Keep the map in a shared CircleCI context so
 the repos need no per-repo file.
 
+Every value must be a Discord user ID (15 to 21 digits); anything else, such
+as `@bob`, stops the run at start-up with an error naming the login, because
+Discord would refuse every message that mentions it.
+
 To get a Discord user ID: User Settings → Advanced → turn on **Developer
 Mode**, then right-click the person → **Copy User ID**.
 

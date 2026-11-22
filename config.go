@@ -194,7 +194,13 @@ func loadUsers(file string, getenv func(string) string, readFile func(string) ([
 			return nil, fmt.Errorf("config: %s has keys %q and %q that differ only by case", source, prev, k)
 		}
 		seen[lk] = k
+		if !snowflakeRe.MatchString(parsed[k]) {
+			return nil, fmt.Errorf("config: %s: Discord user ID for %q is %q, want 15 to 21 digits", source, k, parsed[k])
+		}
 		users[lk] = parsed[k]
 	}
 	return users, nil
 }
+
+// Discord refuses a whole message whose allowed_mentions holds a non-snowflake.
+var snowflakeRe = regexp.MustCompile(`^\d{15,21}$`)

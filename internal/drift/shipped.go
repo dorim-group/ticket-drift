@@ -175,9 +175,11 @@ func (d *Detector) mergedIntoBase(headRef string) ([]PullRequest, error) {
 	if err != nil && !errors.Is(err, ErrNotFound) {
 		return nil, err
 	}
+	// Re-checked here: if the head filter were ever ignored, every PR into the
+	// base would come back and mark nearly everything shipped.
 	var merged []PullRequest
 	for _, p := range all {
-		if p.Merged {
+		if p.Merged && p.HeadRef == headRef && p.BaseRef == d.Base {
 			merged = append(merged, p)
 		}
 	}

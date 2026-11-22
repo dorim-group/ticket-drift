@@ -2,6 +2,7 @@ package drift
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -330,4 +331,72 @@ func TestRule3NeedsTicketPattern(t *testing.T) {
 	}
 	wantShipped(t, res)
 	wantLost(t, res, 1)
+}
+
+// ignoresHeadFilter answers ClosedPullsByHead with every PR it has, as GitHub
+// would if it ever dropped the head= filter.
+type ignoresHeadFilter struct{ *fakeRepo }
+
+func (s ignoresHeadFilter) ClosedPullsByHead(string, string) ([]PullRequest, error) {
+	return s.prs, nil
+}
+
+func TestClosedPullsByHeadRecheckedClientSide(t *testing.T) {
+	r := newFakeRepo()
+	r.commit("m0")
+	r.commit("f1", "m0")
+	r.commit("d1", "m0", "f1")
+	r.commit("g1", "m0")
+	r.commit("m1", "m0", "g1")
+	r.pr(PullRequest{Number: 1, BaseRef: "dev", HeadRef: "IT-1/x", HeadSHA: "f1", Merged: true, MergeCommitSHA: "d1", MergedAt: t1})
+	r.pr(PullRequest{Number: 2, BaseRef: "main", HeadRef: "IT-2/y", HeadSHA: "g1", Merged: true, MergeCommitSHA: "m1", MergedAt: t2})
+	r.pr(PullRequest{Number: 3, BaseRef: "main", HeadRef: "IT-1/x", HeadSHA: "f1", MergedAt: t2})
+	d := testDetector(ignoresHeadFilter{r})
+	d.BaseSHA = "m1"
+	res, err := d.Target("dev", "d1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantShipped(t, res)
+	wantLost(t, res, 1)
+}
+
+var errSentinel = errors.New("sentinel")
+
+type closedByHeadFails struct{ *fakeRepo }
+
+func (closedByHeadFails) ClosedPullsByHead(string, string) ([]PullRequest, error) {
+	return nil, fmt.Errorf("github: list: %w", errSentinel)
+}
+
+func TestTargetFailsWhenClosedPullsByHeadFails(t *testing.T) {
+	r := newFakeRepo()
+	r.commit("m0")
+	r.commit("f1", "m0")
+	r.commit("d1", "m0", "f1")
+	r.pr(PullRequest{Number: 1, BaseRef: "dev", HeadRef: "IT-1/x", HeadSHA: "f1", Merged: true, MergeCommitSHA: "d1", MergedAt: t1})
+	d := testDetector(closedByHeadFails{r})
+	d.BaseSHA = "m0"
+	if _, err := d.Target("dev", "d1"); !errors.Is(err, errSentinel) {
+		t.Errorf("err = %v, want the sentinel", err)
+	}
+}
+
+// siblingAheadFails fails only rule 4's own-commits listing, which starts
+// from the shipped sibling's head (f1 in siblingRepo).
+type siblingAheadFails struct{ *fakeRepo }
+
+func (s siblingAheadFails) AheadCommits(base, head string) ([]Commit, error) {
+	if base == "f1" {
+		return nil, fmt.Errorf("github: compare: %w", errSentinel)
+	}
+	return s.fakeRepo.AheadCommits(base, head)
+}
+
+func TestTargetFailsWhenSiblingRuleCompareFails(t *testing.T) {
+	d := testDetector(siblingAheadFails{siblingRepo(false)})
+	d.BaseSHA = "m1"
+	if _, err := d.Target("dev", "d1"); !errors.Is(err, errSentinel) {
+		t.Errorf("err = %v, want the sentinel", err)
+	}
 }

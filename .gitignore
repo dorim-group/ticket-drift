@@ -1,2 +1,7 @@
 /docs
 .idea
+/bin/
+/ticket-drift
+report.json
+.DS_Store
+.superpowers/

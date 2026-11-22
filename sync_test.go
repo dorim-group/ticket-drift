@@ -20,7 +20,7 @@ const (
 )
 
 // fakeGH answers drift.Source from scripted maps, so runSync's own Detector
-// runs for real. Unknown compare keys answer "identical", others empty.
+// runs for real. Unscripted compares fail; other unknown keys answer empty.
 type fakeGH struct {
 	branches     map[string]string
 	status       map[string]string              // "base...head" -> status
@@ -29,6 +29,7 @@ type fakeGH struct {
 	closedByHead map[string][]drift.PullRequest // head ref -> PRs into base
 	updates      []string                       // "branch=sha"
 	failUpdate   map[string]error               // branch -> error
+	failRead     map[string]error               // branch -> BranchSHA error
 	events       *[]string                      // shared with fakeDC
 
 	// afterSnapshot runs once, after the snapshotReads-th BranchSHA call.
@@ -45,12 +46,16 @@ func newFakeGH(events *[]string) *fakeGH {
 		prsByCommit:   map[string][]drift.PullRequest{},
 		closedByHead:  map[string][]drift.PullRequest{},
 		failUpdate:    map[string]error{},
+		failRead:      map[string]error{},
 		events:        events,
 		snapshotReads: 3, // main, dev, stage
 	}
 }
 
 func (g *fakeGH) BranchSHA(branch string) (string, bool, error) {
+	if err := g.failRead[branch]; err != nil {
+		return "", false, err
+	}
 	sha, ok := g.branches[branch]
 	g.reads++
 	if g.reads == g.snapshotReads && g.afterSnapshot != nil {
@@ -75,7 +80,8 @@ func (g *fakeGH) CompareStatus(base, head string) (string, error) {
 	if s, ok := g.status[base+"..."+head]; ok {
 		return s, nil
 	}
-	return "identical", nil
+	// Never a default that could clear a PR or allow a reset by accident.
+	return "", fmt.Errorf("fakeGH: unscripted compare %s...%s", base, head)
 }
 
 func (g *fakeGH) AheadCommits(base, head string) ([]drift.Commit, error) {
@@ -566,6 +572,78 @@ func TestSyncSupersededByNewerRun(t *testing.T) {
 	}
 	if postsContaining(e.dc, "НЕ выровнена") != 0 {
 		t.Errorf("unexpected correction in %q", e.dc.posts)
+	}
+}
+
+// The reset writes the SHA pinned at the snapshot, even when main has moved
+// on since: a later run is responsible for the later main.
+func TestSyncResetWritesPinnedBaseNotLiveBase(t *testing.T) {
+	e := newSyncEnv(t)
+	e.gh.lose("dev", lostPR{1, "IT-1/a", "ann"})
+	e.gh.branches["stage"] = mainSHA
+	e.gh.afterSnapshot = func(g *fakeGH) {
+		g.branches["main"] = main2SHA
+		g.branches["dev"] = "0000000old"
+		g.status[mainSHA+"...0000000old"] = "behind"
+	}
+
+	if _, err := e.run(); err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if want := []string{"dev=" + mainSHA}; !reflect.DeepEqual(e.gh.updates, want) {
+		t.Errorf("updates = %v, want %v", e.gh.updates, want)
+	}
+}
+
+// A failed reset is corrected only on a branch a message said was reset.
+func TestSyncNoCorrectionForUnannouncedTarget(t *testing.T) {
+	e := newSyncEnv(t)
+	e.gh.lose("dev", lostPR{1, "IT-1/a", "ann"})
+	e.gh.branches["stage"] = "0000000stg"
+	e.gh.failUpdate["stage"] = errors.New("github: PATCH refs/heads/stage: status 422")
+
+	r, err := e.run()
+	if err == nil || !strings.Contains(err.Error(), "stage") {
+		t.Fatalf("err = %v, want an error for the stage reset", err)
+	}
+	if got := targetOf(t, r, "stage").Reset.Outcome; got != "failed" {
+		t.Errorf("stage reset = %q, want failed", got)
+	}
+	if n := postsContaining(e.dc, "**stage** НЕ выровнена"); n != 0 {
+		t.Errorf("posts = %q, want no correction for stage", e.dc.posts)
+	}
+	if want := []string{"dev=" + mainSHA}; !reflect.DeepEqual(e.gh.updates, want) {
+		t.Errorf("updates = %v, want %v", e.gh.updates, want)
+	}
+}
+
+func TestResetTargetFailsWhenReReadFails(t *testing.T) {
+	gh := newFakeGH(&[]string{})
+	gh.branches["dev"] = "0000000dev"
+	gh.failRead["dev"] = errors.New("github: 502")
+	outcome, reason := resetTarget(gh, "main", mainSHA, "dev", "0000000dev")
+	if outcome != resetFailed || !strings.Contains(reason, "502") || len(gh.updates) != 0 {
+		t.Errorf("outcome = %q, reason = %q, updates = %v; want failed, no update", outcome, reason, gh.updates)
+	}
+}
+
+func TestResetTargetFailsWhenCompareFails(t *testing.T) {
+	gh := newFakeGH(&[]string{})
+	gh.branches["dev"] = "0000000new" // moved since the snapshot; compare unscripted
+	outcome, reason := resetTarget(gh, "main", mainSHA, "dev", "0000000dev")
+	if outcome != resetFailed || !strings.Contains(reason, "unscripted compare") || len(gh.updates) != 0 {
+		t.Errorf("outcome = %q, reason = %q, updates = %v; want failed, no update", outcome, reason, gh.updates)
+	}
+}
+
+func TestResetTargetFailsWhenLiveBaseReadFails(t *testing.T) {
+	gh := newFakeGH(&[]string{})
+	gh.branches["dev"] = "0000000new"
+	gh.status[mainSHA+"...0000000new"] = "diverged"
+	gh.failRead["main"] = errors.New("github: 502")
+	outcome, reason := resetTarget(gh, "main", mainSHA, "dev", "0000000dev")
+	if outcome != resetFailed || !strings.Contains(reason, "re-read main") || len(gh.updates) != 0 {
+		t.Errorf("outcome = %q, reason = %q, updates = %v; want failed, no update", outcome, reason, gh.updates)
 	}
 }
 

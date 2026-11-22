@@ -227,6 +227,9 @@ The version is recorded in the report as `ticket_drift_version`.
   SHAs; it is reported as lost although the change is in `main`.
 - If the run fails halfway through notifications, a re-run posts the already
   delivered messages again.
+- A Discord post whose answer is lost — a timeout, a dropped connection or a
+  5xx after Discord had already accepted it — is retried, so that message can
+  appear twice.
 - The moment between the re-read and the force-update is not atomic; a merge
   landing in that sub-second window would be wiped unreported.
 - More than 2000 commits ahead on a target is treated as an error, not

@@ -54,4 +54,6 @@ type Detector struct {
 	BaseSHA   string   // pinned tip of Base
 	LongLived []string // Base plus every target
 	EnvWords  []string // LongLived plus "prod"
+
+	closedByHead map[string][]PullRequest // merged PRs into Base, per head ref
 }

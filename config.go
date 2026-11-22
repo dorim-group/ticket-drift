@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -86,7 +87,8 @@ func parseConfig(args []string, getenv func(string) string, readFile func(string
 	}
 
 	for _, t := range strings.Split(targets, ",") {
-		if t = strings.TrimSpace(t); t != "" {
+		// A repeated target would be walked, reported and reset twice.
+		if t = strings.TrimSpace(t); t != "" && !slices.Contains(cfg.Targets, t) {
 			cfg.Targets = append(cfg.Targets, t)
 		}
 	}

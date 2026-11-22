@@ -265,3 +265,13 @@ func TestConfigUsersRejectsNonSnowflake(t *testing.T) {
 		t.Fatalf("err = %v, want an error naming bob", err)
 	}
 }
+
+func TestConfigTargetsDeduplicated(t *testing.T) {
+	cfg, err := parse(t, baseEnv(), nil, "-targets", "dev,dev,stage")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(cfg.Targets, []string{"dev", "stage"}) {
+		t.Errorf("targets = %v, want [dev stage]", cfg.Targets)
+	}
+}

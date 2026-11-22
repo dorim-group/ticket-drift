@@ -209,12 +209,25 @@ it would make, and changes nothing.
 
 Installed with `go install …@v0.1.0`, the binary reports the module version
 Go recorded at build time; the commit in brackets is `none`, since
-`go install` stamps no commit. A release build stamped through `-ldflags`
-shows the commit instead. A local `go build` in a git checkout reports the
+`go install` stamps no commit. A release binary shows the commit instead,
+`ticket-drift v0.1.0 (abc1234)`. A local `go build` in a git checkout reports the
 pseudo-version Go derives from the checkout, such as
 `v0.0.0-20261122191154-62323ad417e4+dirty`; `dev` means no version
 information was recorded at all.
 The version is recorded in the report as `ticket_drift_version`.
+
+## Release
+
+Pushing a tag that starts with `v` runs GoReleaser in GitHub Actions
+(`.github/workflows/release.yml`): it runs the tests, builds linux and darwin
+binaries for amd64 and arm64 with the version and commit stamped in, and
+publishes them with `checksums.txt` as a GitHub release.
+
+    git tag v0.1.0 && git push origin v0.1.0
+
+`go install github.com/dorim-group/ticket-drift@v0.1.0` works from the same
+tag and needs no release assets. Pushes to `main` and pull requests run
+`go vet`, the race tests and a `gofmt` check (`.github/workflows/test.yml`).
 
 ## Known limits
 

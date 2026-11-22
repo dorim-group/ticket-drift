@@ -64,6 +64,9 @@ func (d *Detector) walk(target, tip string, ahead map[string]Commit) (walkResult
 			case found && d.longLived(pr.HeadRef) && hasSecond && secondAhead:
 				res.Carriers = append(res.Carriers, c.SHA)
 				stack = append(stack, walkFrame{second, pr.HeadRef})
+			case found && d.longLived(pr.HeadRef) && hasSecond:
+				// A merged "main into dev" PR only brought in commits main has.
+				res.BackMerges = append(res.BackMerges, c.SHA)
 			case found:
 				if !seenPR[pr.Number] {
 					seenPR[pr.Number] = true

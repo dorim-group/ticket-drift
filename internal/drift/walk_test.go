@@ -230,3 +230,19 @@ func TestWalkSourceErrorAborts(t *testing.T) {
 		t.Errorf("err = %v, want boom", err)
 	}
 }
+
+func TestWalkBackMergeViaPRIgnored(t *testing.T) {
+	r := newFakeRepo()
+	r.commit("m0")
+	r.commit("m1", "m0")
+	r.commitMsg("d0", "IT-1 thing (#1)", "m0")
+	r.commitMsg("d1", "Merge pull request #2 from o/main", "d0", "m1")
+	r.pr(PullRequest{Number: 1, BaseRef: "dev", HeadRef: "IT-1/x", HeadSHA: "f9", Merged: true, MergeCommitSHA: "d0"})
+	r.pr(PullRequest{Number: 2, BaseRef: "dev", HeadRef: "main", HeadSHA: "m1", Merged: true, MergeCommitSHA: "d1"})
+	res := runWalk(t, r, "m1", "d1")
+	if !slices.Equal(res.BackMerges, []string{"d1"}) {
+		t.Errorf("BackMerges = %v, want [d1]", res.BackMerges)
+	}
+	wantNumbers(t, res, 1)
+	wantNone(t, res, false, true, true)
+}

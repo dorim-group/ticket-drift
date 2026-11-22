@@ -16,7 +16,10 @@ single Discord message — nothing is reset.
        │         └─ PRs and commits on dev/stage whose code is not on main
        └─ pin the tips of main, dev and stage once
 
-A failure in any phase stops the run before the next one.
+A failure in any phase before the reset — reading GitHub, checking ClickUp,
+posting a message — stops the run with nothing reset. In the reset phase the
+targets are reset independently: a refused or aborted reset of `dev` does not
+stop `stage`, and the run then exits `1`.
 
 ## Install
 
@@ -132,8 +135,8 @@ The App (or token) needs:
 ### Exit codes
 
 `0` done — including nothing to do and dry runs. `1` anything failed: a
-lookup, a message, or a reset that was aborted or refused. `2` unknown
-command. CI should read the report, not the exit code, for detail.
+lookup, a message, or a reset that was aborted or refused. `2` no command or
+an unknown command. CI should read the report, not the exit code, for detail.
 
 ### Report
 
@@ -155,7 +158,8 @@ it was posted. It is written on failure too, filled as far as the run got.
 ### CircleCI
 
 Runs on `main` only. No checkout is needed — everything goes through the
-GitHub API:
+GitHub API. Pin a release tag rather than `@latest`, so a new release reaches
+CI only when you move the pin:
 
     version: 2.1
 
@@ -167,7 +171,7 @@ GitHub API:
           - run:
               name: Reset dev and stage to main
               command: |
-                go install github.com/dorim-group/ticket-drift@latest
+                go install github.com/dorim-group/ticket-drift@v0.1.0
                 ticket-drift sync -out-json report.json
           - store_artifacts:
               path: report.json
@@ -182,6 +186,14 @@ GitHub API:
                 branches:
                   only: main
 
+While the repository is private, `go install` needs
+`GOPRIVATE=github.com/dorim-group` in the job's environment and git
+credentials that can read it, for example a read-only token in
+`MODULE_READ_TOKEN` and, before the install step,
+`git config --global url."https://x-access-token:${MODULE_READ_TOKEN}@github.com/dorim-group/".insteadOf "https://github.com/dorim-group/"`.
+Do not put that token in `GITHUB_TOKEN`: ticket-drift would use it instead of
+the App.
+
 ### Trying it locally
 
     export GITHUB_TOKEN=… CLICKUP_API_TOKEN=… CLICKUP_TEAM_ID=…
@@ -193,10 +205,16 @@ it would make, and changes nothing.
 ## Version
 
     ticket-drift version
-    ticket-drift v0.1.0 (abc1234)
+    ticket-drift v0.1.0 (none)
 
-The version is recorded in the report as `ticket_drift_version`. A `dev`
-version means a local `go build`, not a release.
+Installed with `go install …@v0.1.0`, the binary reports the module version
+Go recorded at build time; the commit in brackets is `none`, since
+`go install` stamps no commit. A release build stamped through `-ldflags`
+shows the commit instead. A local `go build` in a git checkout reports the
+pseudo-version Go derives from the checkout, such as
+`v0.0.0-20261122191154-62323ad417e4+dirty`; `dev` means no version
+information was recorded at all.
+The version is recorded in the report as `ticket_drift_version`.
 
 ## Known limits
 

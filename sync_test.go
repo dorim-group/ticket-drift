@@ -555,6 +555,27 @@ func TestSyncUpdateRefusedPostsCorrection(t *testing.T) {
 	postsBeforeUpdates(t, *e.events, 1)
 }
 
+// The same-branch rule must be on (runSync passes the ticket pattern), and
+// every shipped PR is printed with the rule that cleared it.
+func TestSyncPrintsMatchedBy(t *testing.T) {
+	e := newSyncEnv(t)
+	e.gh.lose("dev", lostPR{1, "IT-1/a", "ann"})
+	e.gh.branches["stage"] = mainSHA
+	e.gh.closedByHead["IT-1/a"] = []drift.PullRequest{{Number: 7, HeadRef: "IT-1/a", HeadSHA: "rebased", BaseRef: "main", Merged: true}}
+	e.gh.status["dev-head-1...rebased"] = "diverged"
+
+	r, err := e.run()
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if dev := targetOf(t, r, "dev"); len(dev.Shipped) != 1 || dev.Shipped[0].MatchedBy != "branch" {
+		t.Fatalf("dev shipped = %+v, want #1 by branch", dev.Shipped)
+	}
+	if want := "  shipped #1 IT-1/a matched_by=branch\n"; !strings.Contains(e.out.String(), want) {
+		t.Errorf("output lacks %q:\n%s", want, e.out.String())
+	}
+}
+
 func TestReportJSONShape(t *testing.T) {
 	e := newSyncEnv(t)
 	e.gh.branches["dev"] = "0000000dev"

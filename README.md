@@ -54,8 +54,9 @@ state it would repeat the same messages on every merge to `main`.
 
 What a ticket is lost from is decided by the code alone: a pull request on
 `dev` or `stage` is lost unless its head commit is on `main`, a pull request
-from the same branch merged into `main` contains it, the same branch was
-merged into `main` later, or an environment-suffixed sibling branch
+from the same branch merged into `main` contains it, the same branch — only
+one whose name carries a ticket ID — was merged into `main` later (the
+terminal output shows `matched_by=branch` for these), or an environment-suffixed sibling branch
 (`IT-1/x-dev` and `IT-1/x`) shipped and this one has no commits of its own.
 When a rule cannot be evaluated the work is reported: a false alarm beats a
 silent loss. ClickUp only describes what git found.

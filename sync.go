@@ -76,6 +76,7 @@ func runSync(cfg config, gh repoAPI, cu ticketLookup, dc notifier, out io.Writer
 	det := &drift.Detector{
 		Src: gh, Base: cfg.Base, BaseSHA: baseSHA,
 		LongLived: longLived, EnvWords: append(slices.Clone(longLived), "prod"),
+		TicketPattern: cfg.Pattern,
 	}
 	var results []drift.TargetResult
 	for i := range rep.Targets {
@@ -285,6 +286,10 @@ func printRun(out io.Writer, rep report) {
 		}
 		fmt.Fprintf(out, "%s at %s: %d ahead, %d shipped, %d lost, %d unattributed\n",
 			tr.Name, shortSHA(tr.SHA), tr.AheadBy, len(tr.Shipped), len(tr.Lost), len(tr.Unattributed))
+		// A name-based match is the least certain; CI logs must show which rule cleared a PR.
+		for _, p := range tr.Shipped {
+			fmt.Fprintf(out, "  shipped #%d %s matched_by=%s\n", p.Number, p.HeadRef, p.MatchedBy)
+		}
 	}
 	if len(rep.Groups) == 0 {
 		fmt.Fprintln(out, "nothing lost, no messages")

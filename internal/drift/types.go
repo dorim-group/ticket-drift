@@ -2,6 +2,7 @@ package drift
 
 import (
 	"errors"
+	"regexp"
 	"time"
 )
 
@@ -54,6 +55,10 @@ type Detector struct {
 	BaseSHA   string   // pinned tip of Base
 	LongLived []string // Base plus every target
 	EnvWords  []string // LongLived plus "prod"
+
+	// TicketPattern finds ticket IDs in branch names. The same-branch rule
+	// applies only to branches that carry one; nil disables that rule.
+	TicketPattern *regexp.Regexp
 
 	closedByHead map[string][]PullRequest // merged PRs into Base, per head ref
 }

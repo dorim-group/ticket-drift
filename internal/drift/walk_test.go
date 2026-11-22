@@ -2,16 +2,18 @@ package drift
 
 import (
 	"errors"
+	"regexp"
 	"slices"
 	"testing"
 )
 
 func testDetector(src Source) *Detector {
 	return &Detector{
-		Src:       src,
-		Base:      "main",
-		LongLived: []string{"main", "dev", "stage"},
-		EnvWords:  []string{"main", "dev", "stage", "prod"},
+		Src:           src,
+		Base:          "main",
+		LongLived:     []string{"main", "dev", "stage"},
+		EnvWords:      []string{"main", "dev", "stage", "prod"},
+		TicketPattern: regexp.MustCompile(`(?i)IT-\d+`),
 	}
 }
 

@@ -10,7 +10,7 @@ type MatchedBy string
 const (
 	ByAncestor MatchedBy = "ancestor" // head commit is reachable from main
 	ByHead     MatchedBy = "head"     // a PR merged into main from the same branch contains the head commit
-	ByBranch   MatchedBy = "branch"   // the same branch merged into main at or after this PR was merged
+	ByBranch   MatchedBy = "branch"   // the same ticket branch merged into main at or after this PR was merged
 	BySibling  MatchedBy = "sibling"  // an env-suffixed sibling shipped and this PR has no commits of its own
 )
 
@@ -109,9 +109,13 @@ func (d *Detector) shippedBy(pr PullRequest, ahead map[string]Commit) (MatchedBy
 			return "", false, err
 		}
 	}
-	for _, m := range merged {
-		if !m.MergedAt.Before(pr.MergedAt) {
-			return ByBranch, true, nil
+	// A generic name such as "hotfix" is reused for unrelated work, so only a
+	// branch named after a ticket is taken to be the same work rewritten.
+	if d.TicketPattern != nil && len(TicketIDs(d.TicketPattern, pr.HeadRef)) > 0 {
+		for _, m := range merged {
+			if !m.MergedAt.Before(pr.MergedAt) {
+				return ByBranch, true, nil
+			}
 		}
 	}
 

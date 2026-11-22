@@ -296,3 +296,38 @@ func TestSquashedCarrierPRsReportedForTheWalkedTarget(t *testing.T) {
 		t.Errorf("Carriers = %v, want [d1]", res.Carriers)
 	}
 }
+
+// A generic branch name reused for unrelated work must not mark the old work
+// shipped: rule 3 needs a ticket ID in the branch name.
+func TestRule3SkippedForBranchWithoutTicket(t *testing.T) {
+	r := newFakeRepo()
+	r.commit("m0")
+	r.commit("h1", "m0")
+	r.commitMsg("d1", "Merge pull request #1 from o/hotfix", "m0", "h1")
+	r.commit("h2", "m0")
+	r.commitMsg("m1", "Merge pull request #2 from o/hotfix", "m0", "h2")
+	r.pr(PullRequest{Number: 1, BaseRef: "dev", HeadRef: "hotfix", HeadSHA: "h1", Merged: true, MergeCommitSHA: "d1", MergedAt: t1})
+	r.pr(PullRequest{Number: 2, BaseRef: "main", HeadRef: "hotfix", HeadSHA: "h2", Merged: true, MergeCommitSHA: "m1", MergedAt: t2})
+	res := runTarget(t, r, "m1", "d1")
+	wantShipped(t, res)
+	wantLost(t, res, 1)
+}
+
+func TestRule3NeedsTicketPattern(t *testing.T) {
+	r := newFakeRepo()
+	r.commit("m0")
+	r.commit("f1", "m0")
+	r.commit("g1", "m0")
+	r.commit("d1", "m0", "f1")
+	r.commit("m1", "m0")
+	r.pr(PullRequest{Number: 1, BaseRef: "dev", HeadRef: "IT-1/x", HeadSHA: "f1", Merged: true, MergeCommitSHA: "d1", MergedAt: t1})
+	r.pr(PullRequest{Number: 2, BaseRef: "main", HeadRef: "IT-1/x", HeadSHA: "g1", Merged: true, MergeCommitSHA: "m1", MergedAt: t2})
+	d := testDetector(r)
+	d.BaseSHA, d.TicketPattern = "m1", nil
+	res, err := d.Target("dev", "d1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantShipped(t, res)
+	wantLost(t, res, 1)
+}

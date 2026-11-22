@@ -29,7 +29,72 @@ func runWalk(t *testing.T, r *fakeRepo, mainTip, devTip string) walkResult {
 	if err != nil {
 		t.Fatal(err)
 	}
+	checkAccounted(t, r, m, devTip, res)
 	return res
+}
+
+// checkAccounted asserts the walk's invariant: every ahead commit on a
+// first-parent chain reachable from tip through the descents is in exactly
+// one result list, or attributed to a PR in res.PRs. The descents are derived
+// here from the graph: every parent after the first that is in the ahead set,
+// except a reported PR's own head; and the head of a single-parent carrier.
+func checkAccounted(t *testing.T, r *fakeRepo, ahead map[string]Commit, tip string, res walkResult) {
+	t.Helper()
+	reported := map[int]PullRequest{}
+	for _, p := range res.PRs {
+		reported[p.Number] = p
+	}
+	count := map[string]int{}
+	for _, s := range res.BackMerges {
+		count[s]++
+	}
+	for _, s := range res.Carriers {
+		count[s]++
+	}
+	for _, c := range res.Unattributed {
+		count[c.SHA]++
+	}
+	for sha, n := range res.attributed {
+		if _, ok := reported[n]; ok {
+			count[sha]++
+		}
+	}
+
+	seen := map[string]bool{}
+	starts := []string{tip}
+	for len(starts) > 0 {
+		sha := starts[len(starts)-1]
+		starts = starts[:len(starts)-1]
+		for {
+			c, ok := ahead[sha]
+			if !ok || seen[sha] {
+				break
+			}
+			seen[sha] = true
+			if count[sha] != 1 {
+				t.Errorf("commit %s accounted for %d times, want 1", sha, count[sha])
+			}
+			n, attributed := res.attributed[sha]
+			pr, isPR := reported[n]
+			isPR = attributed && isPR
+			for _, p := range c.Parents[min(1, len(c.Parents)):] {
+				if _, in := ahead[p]; in && !(isPR && p == pr.HeadSHA) {
+					starts = append(starts, p)
+				}
+			}
+			if attributed && len(c.Parents) == 1 && slices.Contains(res.Carriers, sha) {
+				for _, p := range r.prs {
+					if p.Number == n {
+						starts = append(starts, p.HeadSHA)
+					}
+				}
+			}
+			if len(c.Parents) == 0 {
+				break
+			}
+			sha = c.Parents[0]
+		}
+	}
 }
 
 func prNumbers(res walkResult) []int {
@@ -158,8 +223,13 @@ func TestWalkLocalFeatureMergeUnattributed(t *testing.T) {
 	r.commit("f1", "m0")
 	r.commitMsg("d1", "Merge branch 'IT-9/x' into dev", "m0", "f1")
 	res := runWalk(t, r, "m0", "d1")
-	if len(res.Unattributed) != 1 || res.Unattributed[0].SHA != "d1" {
-		t.Errorf("Unattributed = %+v, want [d1]", res.Unattributed)
+	var got []string
+	for _, c := range res.Unattributed {
+		got = append(got, c.SHA)
+	}
+	// The merge and the feature's own commit: neither came through a PR.
+	if !slices.Equal(got, []string{"d1", "f1"}) {
+		t.Errorf("Unattributed = %v, want [d1 f1]", got)
 	}
 	wantNone(t, res, true, true, false)
 }
@@ -209,6 +279,55 @@ func TestWalkNeverVisitsTwice(t *testing.T) {
 	wantNumbers(t, res, 10, 11)
 	if !slices.Equal(res.Carriers, []string{"d2", "d1"}) {
 		t.Errorf("Carriers = %v, want [d2 d1]", res.Carriers)
+	}
+}
+
+// fastForwardRepo: dev holds squash PRs #1 and #2; a feature branch IT-5/foo
+// merged dev into itself (x1) and dev was then fast-forwarded to x1, so the
+// old dev chain hangs off x1's second parent.
+func fastForwardRepo(x1Msg string) *fakeRepo {
+	r := newFakeRepo()
+	r.commit("m0")
+	r.commitMsg("d1", "IT-1 one (#1)", "m0")
+	r.commitMsg("d2", "IT-2 two (#2)", "d1")
+	r.commit("f1", "m0")
+	r.commitMsg("x1", x1Msg, "f1", "d2")
+	r.pr(PullRequest{Number: 1, BaseRef: "dev", HeadRef: "IT-1/a", HeadSHA: "h1", Merged: true, MergeCommitSHA: "d1"})
+	r.pr(PullRequest{Number: 2, BaseRef: "dev", HeadRef: "IT-2/b", HeadSHA: "h2", Merged: true, MergeCommitSHA: "d2"})
+	return r
+}
+
+func TestWalkFastForwardedTargetWithPR(t *testing.T) {
+	r := fastForwardRepo("Merge branch 'dev' into IT-5/foo")
+	r.pr(PullRequest{Number: 5, BaseRef: "dev", HeadRef: "IT-5/foo", HeadSHA: "x1", Merged: true, MergeCommitSHA: "x1"})
+	res := runWalk(t, r, "m0", "x1")
+	wantNumbers(t, res, 1, 2, 5)
+	wantNone(t, res, true, true, false)
+}
+
+func TestWalkFastForwardedTargetEditedMessage(t *testing.T) {
+	res := runWalk(t, fastForwardRepo("sync with dev"), "m0", "x1")
+	wantNumbers(t, res, 1, 2)
+	if !slices.ContainsFunc(res.Unattributed, func(c Commit) bool { return c.SHA == "x1" }) {
+		t.Errorf("Unattributed = %+v, want x1 among them", res.Unattributed)
+	}
+	wantNone(t, res, true, true, false)
+}
+
+func TestWalkOctopusMerge(t *testing.T) {
+	r := newFakeRepo()
+	r.commit("m0")
+	r.commit("m1", "m0")
+	r.commitMsg("w1", "IT-3 thing (#3)", "m0")
+	r.commitMsg("d1", "Merge branches 'main' and 'work' into dev", "m0", "m1", "w1")
+	r.pr(PullRequest{Number: 3, BaseRef: "dev", HeadRef: "IT-3/x", HeadSHA: "h3", Merged: true, MergeCommitSHA: "w1"})
+	res := runWalk(t, r, "m1", "d1")
+	wantNumbers(t, res, 3)
+	if slices.Contains(res.BackMerges, "d1") {
+		t.Errorf("BackMerges = %v, d1 must not be a back-merge", res.BackMerges)
+	}
+	if len(res.Unattributed) != 1 || res.Unattributed[0].SHA != "d1" {
+		t.Errorf("Unattributed = %+v, want [d1]", res.Unattributed)
 	}
 }
 

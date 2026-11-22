@@ -12,6 +12,8 @@ type walkResult struct {
 	BackMerges   []string      // SHAs
 	Carriers     []string      // SHAs
 	Unattributed []Commit
+
+	attributed map[string]int // commit SHA -> number of the PR found for it, whatever its class
 }
 
 var (
@@ -26,68 +28,114 @@ const indexPages = 3
 
 type walkFrame struct {
 	start string
-	chain string
+	chain string // the branch the chain's PRs were merged into
+}
+
+type walker struct {
+	d       *Detector
+	ahead   map[string]Commit
+	res     walkResult
+	stack   []walkFrame
+	visited map[string]bool
+	seenPR  map[int]bool
+	indexes map[string]map[string]PullRequest
 }
 
 // walk follows the first-parent chain from tip and attributes every commit in
-// ahead to a pull request. A merge of another long-lived branch is descended
-// into, since the PRs that landed there are also on the target.
+// ahead to a pull request. Whatever a merge brought in beside its first parent
+// is walked the same way: a merge of another long-lived branch carries PRs
+// that are also on the target, and a target fast-forwarded to a branch that
+// had merged the target in keeps its previous history only there.
 func (d *Detector) walk(target, tip string, ahead map[string]Commit) (walkResult, error) {
-	var res walkResult
-	visited := map[string]bool{}
-	seenPR := map[int]bool{}
-	indexes := map[string]map[string]PullRequest{}
-
-	stack := []walkFrame{{tip, target}}
-	for len(stack) > 0 {
-		f := stack[len(stack)-1]
-		stack = stack[:len(stack)-1]
+	w := &walker{
+		d: d, ahead: ahead,
+		res:     walkResult{attributed: map[string]int{}},
+		stack:   []walkFrame{{tip, target}},
+		visited: map[string]bool{},
+		seenPR:  map[int]bool{},
+		indexes: map[string]map[string]PullRequest{},
+	}
+	for len(w.stack) > 0 {
+		f := w.stack[len(w.stack)-1]
+		w.stack = w.stack[:len(w.stack)-1]
 
 		for sha := f.start; ; {
-			c, ok := ahead[sha]
-			if !ok || visited[sha] {
+			c, ok := w.ahead[sha]
+			if !ok || w.visited[sha] {
 				break
 			}
-			visited[sha] = true
-
-			pr, found, err := d.findPR(c, f.chain, indexes)
-			if err != nil {
-				return res, err
+			w.visited[sha] = true
+			if err := w.classify(c, f.chain); err != nil {
+				return w.res, err
 			}
-			second, hasSecond := "", len(c.Parents) > 1
-			if hasSecond {
-				second = c.Parents[1]
-			}
-			_, secondAhead := ahead[second]
-
-			switch {
-			case found && d.longLived(pr.HeadRef) && hasSecond && secondAhead:
-				res.Carriers = append(res.Carriers, c.SHA)
-				stack = append(stack, walkFrame{second, pr.HeadRef})
-			case found && d.longLived(pr.HeadRef) && hasSecond:
-				// A merged "main into dev" PR only brought in commits main has.
-				res.BackMerges = append(res.BackMerges, c.SHA)
-			case found:
-				if !seenPR[pr.Number] {
-					seenPR[pr.Number] = true
-					res.PRs = append(res.PRs, pr)
-				}
-			case hasSecond && !secondAhead:
-				res.BackMerges = append(res.BackMerges, c.SHA)
-			case hasSecond && d.longLivedMerge(c.Message) != "":
-				res.Carriers = append(res.Carriers, c.SHA)
-				stack = append(stack, walkFrame{second, d.longLivedMerge(c.Message)})
-			default:
-				res.Unattributed = append(res.Unattributed, c)
-			}
-
 			if len(c.Parents) == 0 {
 				break
 			}
 			sha = c.Parents[0]
 		}
 	}
-	return res, nil
+	return w.res, nil
+}
+
+// classify records c in exactly one result list and queues every chain it
+// merged in that still has to be walked.
+func (w *walker) classify(c Commit, chain string) error {
+	pr, found, err := w.d.findPR(c, chain, w.indexes)
+	if err != nil {
+		return err
+	}
+	if found {
+		w.res.attributed[c.SHA] = pr.Number
+	}
+	merged := w.mergedIn(c)
+	isMerge := len(c.Parents) > 1
+
+	switch {
+	case found && w.d.longLived(pr.HeadRef) && len(merged) > 0:
+		w.res.Carriers = append(w.res.Carriers, c.SHA)
+		w.descend(merged, pr.HeadRef)
+	case found && w.d.longLived(pr.HeadRef) && isMerge:
+		// A merged "main into dev" PR only brought in commits main has.
+		w.res.BackMerges = append(w.res.BackMerges, c.SHA)
+	case found:
+		w.addPR(pr)
+		// The PR's own head is judged by the shipped rules; anything else
+		// merged in beside it is history the walk has not seen yet.
+		w.descend(slices.DeleteFunc(merged, func(p string) bool { return p == pr.HeadSHA }), chain)
+	case isMerge && len(merged) == 0:
+		w.res.BackMerges = append(w.res.BackMerges, c.SHA)
+	case w.d.longLivedMerge(c.Message) != "":
+		w.res.Carriers = append(w.res.Carriers, c.SHA)
+		w.descend(merged, w.d.longLivedMerge(c.Message))
+	default:
+		w.res.Unattributed = append(w.res.Unattributed, c)
+		w.descend(merged, chain)
+	}
+	return nil
+}
+
+// mergedIn lists c's parents after the first that are inside the ahead set.
+func (w *walker) mergedIn(c Commit) []string {
+	var out []string
+	for _, p := range c.Parents[min(1, len(c.Parents)):] {
+		if _, ok := w.ahead[p]; ok {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func (w *walker) descend(starts []string, chain string) {
+	for _, s := range starts {
+		w.stack = append(w.stack, walkFrame{s, chain})
+	}
+}
+
+func (w *walker) addPR(pr PullRequest) {
+	if !w.seenPR[pr.Number] {
+		w.seenPR[pr.Number] = true
+		w.res.PRs = append(w.res.PRs, pr)
+	}
 }
 
 func (d *Detector) longLived(branch string) bool { return slices.Contains(d.LongLived, branch) }

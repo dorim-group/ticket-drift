@@ -25,7 +25,9 @@ func runWalk(t *testing.T, r *fakeRepo, mainTip, devTip string) walkResult {
 	for _, c := range ahead {
 		m[c.SHA] = c
 	}
-	res, err := testDetector(r).walk("dev", devTip, m)
+	d := testDetector(r)
+	d.BaseSHA = mainTip
+	res, err := d.walk("dev", devTip, m)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -329,6 +331,44 @@ func TestWalkOctopusMerge(t *testing.T) {
 	if len(res.Unattributed) != 1 || res.Unattributed[0].SHA != "d1" {
 		t.Errorf("Unattributed = %+v, want [d1]", res.Unattributed)
 	}
+}
+
+// squashedCarrierRepo: stage holds PRs #10 and #11; dev gets d1, a
+// single-parent squash of PR #9 from stage@s2.
+func squashedCarrierRepo(headSHA string) *fakeRepo {
+	r := newFakeRepo()
+	stageChain(r)
+	r.commitMsg("d1", "Stage (#9)", "m0")
+	r.pr(PullRequest{Number: 9, BaseRef: "dev", HeadRef: "stage", HeadSHA: headSHA, Merged: true, MergeCommitSHA: "d1"})
+	return r
+}
+
+func TestWalkExpandsSquashedCarrier(t *testing.T) {
+	res := runWalk(t, squashedCarrierRepo("s2"), "m0", "d1")
+	wantNumbers(t, res, 10, 11)
+	if !slices.Equal(res.Carriers, []string{"d1"}) {
+		t.Errorf("Carriers = %v, want [d1]", res.Carriers)
+	}
+	wantNone(t, res, true, false, true)
+}
+
+func TestWalkSquashedCarrierAlreadyOnMain(t *testing.T) {
+	r := squashedCarrierRepo("s2")
+	r.commit("m1", "m0", "s2")
+	res := runWalk(t, r, "m1", "d1")
+	if !slices.Equal(res.BackMerges, []string{"d1"}) {
+		t.Errorf("BackMerges = %v, want [d1]", res.BackMerges)
+	}
+	wantNumbers(t, res)
+	wantNone(t, res, false, true, true)
+}
+
+// When what the squash carried cannot be listed, the PR itself is judged so
+// that it is still reported.
+func TestWalkSquashedCarrierUnknownHeadKeepsPR(t *testing.T) {
+	res := runWalk(t, squashedCarrierRepo("gone"), "m0", "d1")
+	wantNumbers(t, res, 9)
+	wantNone(t, res, true, true, true)
 }
 
 type failingSource struct{ Source }

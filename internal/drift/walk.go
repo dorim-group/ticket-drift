@@ -45,7 +45,8 @@ type walker struct {
 // ahead to a pull request. Whatever a merge brought in beside its first parent
 // is walked the same way: a merge of another long-lived branch carries PRs
 // that are also on the target, and a target fast-forwarded to a branch that
-// had merged the target in keeps its previous history only there.
+// had merged the target in keeps its previous history only there. The
+// commits a squash-merged long-lived branch carried are added to ahead.
 func (d *Detector) walk(target, tip string, ahead map[string]Commit) (walkResult, error) {
 	w := &walker{
 		d: d, ahead: ahead,
@@ -97,6 +98,8 @@ func (w *walker) classify(c Commit, chain string) error {
 	case found && w.d.longLived(pr.HeadRef) && isMerge:
 		// A merged "main into dev" PR only brought in commits main has.
 		w.res.BackMerges = append(w.res.BackMerges, c.SHA)
+	case found && w.d.longLived(pr.HeadRef):
+		return w.expand(c, pr)
 	case found:
 		w.addPR(pr)
 		// The PR's own head is judged by the shipped rules; anything else
@@ -111,6 +114,36 @@ func (w *walker) classify(c Commit, chain string) error {
 		w.res.Unattributed = append(w.res.Unattributed, c)
 		w.descend(merged, chain)
 	}
+	return nil
+}
+
+// expand handles a long-lived branch squash- or rebase-merged into another:
+// c has no merged-in parent to descend, so the work it carried is listed from
+// the PR's head and walked as if it had been merged in.
+func (w *walker) expand(c Commit, pr PullRequest) error {
+	extra, err := w.d.Src.AheadCommits(w.d.BaseSHA, pr.HeadSHA)
+	if err == nil && len(extra) > MaxAhead {
+		err = ErrTooManyCommits
+	}
+	switch {
+	case unknown(err):
+		// Cannot tell what it carried: judge the PR itself, so it is reported.
+		w.addPR(pr)
+		return nil
+	case err != nil:
+		return err
+	case len(extra) == 0:
+		// Everything it carried is already on the base.
+		w.res.BackMerges = append(w.res.BackMerges, c.SHA)
+		return nil
+	}
+	w.res.Carriers = append(w.res.Carriers, c.SHA)
+	for _, e := range extra {
+		if _, ok := w.ahead[e.SHA]; !ok {
+			w.ahead[e.SHA] = e
+		}
+	}
+	w.descend([]string{pr.HeadSHA}, pr.HeadRef)
 	return nil
 }
 

@@ -85,6 +85,11 @@ func (d *Detector) shippedBy(pr PullRequest, ahead map[string]Commit) (MatchedBy
 	case !unknown(err):
 		return "", false, err
 	}
+	// Only reached when what a long-lived branch carried could not be listed;
+	// its name says nothing about which of its versions reached the base.
+	if d.longLived(pr.HeadRef) {
+		return "", false, nil
+	}
 
 	merged, err := d.mergedIntoBase(pr.HeadRef)
 	if err != nil {

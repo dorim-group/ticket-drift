@@ -271,3 +271,28 @@ func TestCarrierPRsReportedForTheWalkedTarget(t *testing.T) {
 		t.Errorf("Target = %q, Carriers = %v", res.Target, res.Carriers)
 	}
 }
+
+// A PR from a long-lived branch reaches the shipped rules only when what it
+// carried could not be listed; then only rule 1 may clear it.
+func TestLongLivedHeadJudgedByRule1Only(t *testing.T) {
+	r := newFakeRepo()
+	r.commit("m0")
+	r.commitMsg("d1", "Stage (#9)", "m0")
+	r.commit("m1", "m0")
+	r.pr(PullRequest{Number: 9, BaseRef: "dev", HeadRef: "stage", HeadSHA: "gone", Merged: true, MergeCommitSHA: "d1", MergedAt: t1})
+	r.pr(PullRequest{Number: 8, BaseRef: "main", HeadRef: "stage", HeadSHA: "gone", Merged: true, MergeCommitSHA: "m1", MergedAt: t2})
+	res := runTarget(t, r, "m1", "d1")
+	wantShipped(t, res)
+	wantLost(t, res, 9)
+	if n := r.calls["ClosedPullsByHead"]; n != 0 {
+		t.Errorf("ClosedPullsByHead calls = %d, want 0", n)
+	}
+}
+
+func TestSquashedCarrierPRsReportedForTheWalkedTarget(t *testing.T) {
+	res := runTarget(t, squashedCarrierRepo("s2"), "m0", "d1")
+	wantLost(t, res, 11, 10)
+	if !slices.Equal(res.Carriers, []string{"d1"}) {
+		t.Errorf("Carriers = %v, want [d1]", res.Carriers)
+	}
+}

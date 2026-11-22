@@ -219,6 +219,73 @@ func TestTargetTooManyCommits(t *testing.T) {
 	}
 }
 
+// overLimitSource lists one commit more than MaxAhead for the target itself,
+// as a Source that does not enforce the limit would.
+type overLimitSource struct{ *fakeRepo }
+
+func (overLimitSource) AheadCommits(string, string) ([]Commit, error) {
+	out := make([]Commit, MaxAhead+1)
+	for i := range out {
+		out[i] = Commit{SHA: fmt.Sprintf("c%d", i)}
+	}
+	return out, nil
+}
+
+func TestTargetOwnListOverLimit(t *testing.T) {
+	r := newFakeRepo()
+	r.commit("m0")
+	r.commit("d1", "m0")
+	d := testDetector(overLimitSource{r})
+	d.BaseSHA = "m0"
+	_, err := d.Target("dev", "d1")
+	if !errors.Is(err, ErrTooManyCommits) {
+		t.Errorf("err = %v, want ErrTooManyCommits", err)
+	}
+	if n := r.calls["PullsForCommit"]; n != 0 {
+		t.Errorf("PullsForCommit calls = %d, want 0: nothing is walked", n)
+	}
+}
+
+// The same branch merged into main at exactly the moment this PR was merged
+// into the target counts as shipped: the rule is "at or after".
+func TestShippedByBranchAtSameInstant(t *testing.T) {
+	r := newFakeRepo()
+	r.commit("m0")
+	r.commit("f1", "m0")
+	r.commit("g1", "m0")
+	r.commit("d1", "m0", "f1")
+	r.commit("m1", "m0")
+	r.pr(PullRequest{Number: 1, BaseRef: "dev", HeadRef: "IT-1/x", HeadSHA: "f1", Merged: true, MergeCommitSHA: "d1", MergedAt: t1})
+	r.pr(PullRequest{Number: 2, BaseRef: "main", HeadRef: "IT-1/x", HeadSHA: "g1", Merged: true, MergeCommitSHA: "m1", MergedAt: t1})
+	res := runTarget(t, r, "m1", "d1")
+	wantShipped(t, res, 1, ByBranch)
+	wantLost(t, res)
+}
+
+type closedByHeadTooMany struct{ *fakeRepo }
+
+func (closedByHeadTooMany) ClosedPullsByHead(string, string) ([]PullRequest, error) {
+	return nil, fmt.Errorf("github: list: %w", ErrTooManyCommits)
+}
+
+// A list of merged PRs that is too long to read means the head and branch
+// rules cannot be evaluated: the PR is reported, the run goes on.
+func TestClosedPullsByHeadTooManyMeansLost(t *testing.T) {
+	r := newFakeRepo()
+	r.commit("m0")
+	r.commit("f1", "m0")
+	r.commit("d1", "m0", "f1")
+	r.pr(PullRequest{Number: 1, BaseRef: "dev", HeadRef: "IT-1/x", HeadSHA: "f1", Merged: true, MergeCommitSHA: "d1", MergedAt: t1})
+	d := testDetector(closedByHeadTooMany{r})
+	d.BaseSHA = "m0"
+	res, err := d.Target("dev", "d1")
+	if err != nil {
+		t.Fatalf("err = %v, want none", err)
+	}
+	wantShipped(t, res)
+	wantLost(t, res, 1)
+}
+
 type brokenSource struct{ *fakeRepo }
 
 func (brokenSource) CompareStatus(string, string) (string, error) {

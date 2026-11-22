@@ -1,6 +1,7 @@
 package drift
 
 import (
+	"fmt"
 	"reflect"
 	"regexp"
 	"testing"
@@ -147,6 +148,91 @@ func TestGroupsDeletedAuthorHasNoLogin(t *testing.T) {
 	}
 	if len(gs[0].Logins) != 0 {
 		t.Errorf("logins = %q, want none", gs[0].Logins)
+	}
+}
+
+// A git author name that reads like someone's login is still another person:
+// one group must never name both.
+func TestGroupsLoginAndNameKeptApart(t *testing.T) {
+	gs := Groups([]TargetResult{
+		{Target: "dev", Unattributed: []Commit{
+			{SHA: "c1", AuthorLogin: "ann", AuthorName: "Ann Lee"},
+			{SHA: "c2", AuthorName: "ann"},
+		}},
+	}, groupRE(t))
+	if len(gs) != 2 {
+		t.Fatalf("groups = %+v, want 2", gs)
+	}
+	a, b := gs[0], gs[1]
+	if a.Key != "ann" || !reflect.DeepEqual(a.Logins, []string{"ann"}) || len(a.Names) != 0 || len(a.Items) != 1 {
+		t.Errorf("login group = %+v", a)
+	}
+	if b.Key != "ann" || len(b.Logins) != 0 || !reflect.DeepEqual(b.Names, []string{"ann"}) || len(b.Items) != 1 {
+		t.Errorf("name group = %+v", b)
+	}
+}
+
+func TestGroupsPlaceholderKeys(t *testing.T) {
+	gs := Groups([]TargetResult{
+		{Target: "dev", Lost: []PullRequest{pr(4, "", "bob")}, Unattributed: []Commit{{SHA: "c1"}}},
+	}, groupRE(t))
+	if len(gs) != 2 {
+		t.Fatalf("groups = %+v, want 2", gs)
+	}
+	if g := gs[0]; g.Kind != KindBranch || g.Key != "(no branch)" || !reflect.DeepEqual(g.Logins, []string{"bob"}) {
+		t.Errorf("branch group = %+v", g)
+	}
+	if g := gs[1]; g.Kind != KindCommits || g.Key != "unknown" || len(g.Logins) != 0 || len(g.Names) != 0 {
+		t.Errorf("commit group = %+v", g)
+	}
+}
+
+// Items run in the order the targets were given, then by PR number, however
+// the PRs came in.
+func TestGroupsItemOrderAcrossTargets(t *testing.T) {
+	gs := Groups([]TargetResult{
+		{Target: "dev", Lost: []PullRequest{pr(5, "IT-1/b", "ann"), pr(3, "IT-1/a", "ann")}},
+		{Target: "stage", Lost: []PullRequest{pr(9, "IT-1/c", "ann"), pr(2, "IT-1/d", "ann")}},
+	}, groupRE(t))
+	if len(gs) != 1 {
+		t.Fatalf("groups = %d, want 1", len(gs))
+	}
+	var got []string
+	for _, it := range gs[0].Items {
+		got = append(got, fmt.Sprintf("%s#%d", it.Target, it.PR.Number))
+	}
+	if want := []string{"dev#3", "dev#5", "stage#2", "stage#9"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("items = %v, want %v", got, want)
+	}
+}
+
+func TestGroupsKeyOrderCaseInsensitiveThenBytes(t *testing.T) {
+	gs := Groups([]TargetResult{
+		{Target: "dev", Unattributed: []Commit{
+			{SHA: "c1", AuthorLogin: "ann"},
+			{SHA: "c2", AuthorLogin: "Bob"},
+			{SHA: "c3", AuthorLogin: "Ann"},
+		}},
+	}, groupRE(t))
+	var keys []string
+	for _, g := range gs {
+		keys = append(keys, g.Key)
+	}
+	if want := []string{"Ann", "ann", "Bob"}; !reflect.DeepEqual(keys, want) {
+		t.Errorf("keys = %v, want %v", keys, want)
+	}
+}
+
+func TestGroupTargetsDeduplicated(t *testing.T) {
+	gs := Groups([]TargetResult{
+		{Target: "dev", Lost: []PullRequest{pr(1, "IT-1/a", "ann"), pr(2, "IT-1/b", "ann")}},
+		{Target: "stage", Lost: []PullRequest{pr(3, "IT-1/c", "ann")}},
+	}, groupRE(t))
+	if len(gs) != 1 || len(gs[0].Items) != 3 {
+		t.Fatalf("groups = %+v, want one with 3 items", gs)
+	}
+	if got := gs[0].Targets(); !reflect.DeepEqual(got, []string{"dev", "stage"}) {
+		t.Errorf("targets = %v, want [dev stage]", got)
 	}
 }
 

@@ -3,6 +3,7 @@ package drift
 import (
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -29,8 +30,12 @@ func TestTicketIDs(t *testing.T) {
 }
 
 func TestCompilePatternInvalid(t *testing.T) {
-	if _, err := CompilePattern(`(`); err == nil {
-		t.Error("expected error for invalid pattern")
+	_, err := CompilePattern(`(`)
+	if err == nil {
+		t.Fatal("expected error for invalid pattern")
+	}
+	if !strings.HasPrefix(err.Error(), "drift: ") {
+		t.Errorf("err = %q, want the drift: prefix", err)
 	}
 }
 

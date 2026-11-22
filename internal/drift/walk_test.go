@@ -2,8 +2,11 @@ package drift
 
 import (
 	"errors"
+	"fmt"
+	"maps"
 	"regexp"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -416,19 +419,176 @@ func TestWalkSingleParentCommitNamedLikeMergeIsUnattributed(t *testing.T) {
 type failingSource struct{ Source }
 
 func (failingSource) PullsForCommit(string) ([]PullRequest, error) {
-	return nil, errors.New("boom")
+	return nil, errSentinel
 }
 
-func TestWalkSourceErrorAborts(t *testing.T) {
-	r := mergePRRepo()
-	ahead, _ := r.AheadCommits("m0", "d1")
+// walkWith runs the walk over r's graph with src answering the lookups.
+func walkWith(r *fakeRepo, src Source, mainTip, devTip string) (walkResult, error) {
+	ahead, err := r.AheadCommits(mainTip, devTip)
+	if err != nil {
+		return walkResult{}, err
+	}
 	m := map[string]Commit{}
 	for _, c := range ahead {
 		m[c.SHA] = c
 	}
-	_, err := testDetector(failingSource{r}).walk("dev", "d1", m)
-	if err == nil || err.Error() != "boom" {
-		t.Errorf("err = %v, want boom", err)
+	d := testDetector(src)
+	d.BaseSHA = mainTip
+	return d.walk("dev", devTip, m)
+}
+
+func TestWalkSourceErrorAborts(t *testing.T) {
+	r := mergePRRepo()
+	_, err := walkWith(r, failingSource{r}, "m0", "d1")
+	if !errors.Is(err, errSentinel) {
+		t.Fatalf("err = %v, want the sentinel", err)
+	}
+	if !strings.Contains(err.Error(), "d1") {
+		t.Errorf("err = %v, want it to name commit d1", err)
+	}
+}
+
+func TestMessagePRNumber(t *testing.T) {
+	overflow := "99999999999999999999999999" // too large for an int
+	for msg, want := range map[string]int{
+		"Merge pull request #12 from o/IT-1/x":     12,
+		"IT-2 thing (#34)":                         34,
+		"IT-2 thing (#34)\n\nbody (#56)":           34,
+		"title\n\nMerge pull request #12 from o/x": 0,
+		"no number": 0,
+		"Merge pull request #" + overflow + " from o/x": 0,
+		"IT-2 thing (#" + overflow + ")":                0,
+	} {
+		if got := messagePRNumber(msg); got != want {
+			t.Errorf("messagePRNumber(%q) = %d, want %d", msg, got, want)
+		}
+	}
+}
+
+// messageLookupRepo: d1 merges f1 and names PR #1, which GitHub's commit
+// lookup does not return; p is what Pull(1) answers.
+func messageLookupRepo(p PullRequest) *fakeRepo {
+	r := newFakeRepo()
+	r.noCommitLookup = true
+	r.commit("m0")
+	r.commit("f1", "m0")
+	r.commitMsg("d1", "Merge pull request #1 from o/IT-1/x", "m0", "f1")
+	r.pr(p)
+	return r
+}
+
+func TestWalkMessagePRRejected(t *testing.T) {
+	for name, edit := range map[string]func(*PullRequest){
+		"not merged":          func(p *PullRequest) { p.Merged = false },
+		"other merge commit":  func(p *PullRequest) { p.MergeCommitSHA = "zz" },
+		"base not long-lived": func(p *PullRequest) { p.BaseRef = "feature" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := PullRequest{Number: 1, BaseRef: "dev", HeadRef: "IT-1/x", HeadSHA: "f1", Merged: true, MergeCommitSHA: "d1"}
+			edit(&p)
+			r := messageLookupRepo(p)
+			res := runWalk(t, r, "m0", "d1")
+			wantNumbers(t, res)
+			if r.calls["Pull"] != 1 {
+				t.Errorf("Pull calls = %d, want 1", r.calls["Pull"])
+			}
+			if !slices.ContainsFunc(res.Unattributed, func(c Commit) bool { return c.SHA == "d1" }) {
+				t.Errorf("Unattributed = %+v, want d1 among them", res.Unattributed)
+			}
+		})
+	}
+}
+
+// A number in the message that GitHub does not know is only a wrong hint;
+// the closed-PR index still finds the real PR.
+func TestWalkMessagePRNotFoundFallsThrough(t *testing.T) {
+	r := newFakeRepo()
+	r.noCommitLookup = true
+	r.commit("m0")
+	r.commit("f1", "m0")
+	r.commitMsg("d1", "Merge pull request #7 from o/IT-1/x", "m0", "f1")
+	r.pr(PullRequest{Number: 1, BaseRef: "dev", HeadRef: "IT-1/x", HeadSHA: "f1", Merged: true, MergeCommitSHA: "d1"})
+	res := runWalk(t, r, "m0", "d1")
+	wantNumbers(t, res, 1)
+	if r.calls["Pull"] != 1 || r.calls["ClosedPullsByBase"] < 1 {
+		t.Errorf("Pull calls = %d, ClosedPullsByBase calls = %d; want 1 and >= 1", r.calls["Pull"], r.calls["ClosedPullsByBase"])
+	}
+}
+
+type pullFails struct{ *fakeRepo }
+
+func (pullFails) Pull(int) (PullRequest, error) {
+	return PullRequest{}, fmt.Errorf("github: pull: %w", errSentinel)
+}
+
+type closedByBaseFails struct{ *fakeRepo }
+
+func (closedByBaseFails) ClosedPullsByBase(string, int) ([]PullRequest, error) {
+	return nil, fmt.Errorf("github: list: %w", errSentinel)
+}
+
+func TestWalkLookupErrorsAbort(t *testing.T) {
+	// The merge message names PR #1, so Pull is asked; the squash message
+	// names none, so the closed-PR index is.
+	byMessage, byIndex := mergePRRepo(), squashRepo("IT-2 thing")
+	byMessage.noCommitLookup, byIndex.noCommitLookup = true, true
+	for name, tc := range map[string]struct {
+		r   *fakeRepo
+		src Source
+	}{
+		"Pull":              {byMessage, pullFails{byMessage}},
+		"ClosedPullsByBase": {byIndex, closedByBaseFails{byIndex}},
+	} {
+		if _, err := walkWith(tc.r, tc.src, "m0", "d1"); !errors.Is(err, errSentinel) || !strings.Contains(err.Error(), "d1") {
+			t.Errorf("%s: err = %v, want the sentinel and commit d1", name, err)
+		}
+	}
+}
+
+type carriedListFails struct{ *fakeRepo }
+
+func (carriedListFails) AheadCommits(string, string) ([]Commit, error) {
+	return nil, fmt.Errorf("github: compare: %w", errSentinel)
+}
+
+func TestWalkSquashedCarrierListErrorAborts(t *testing.T) {
+	r := squashedCarrierRepo("s2")
+	_, err := walkWith(r, carriedListFails{r}, "m0", "d1")
+	if !errors.Is(err, errSentinel) || !strings.Contains(err.Error(), "#9") {
+		t.Errorf("err = %v, want the sentinel and PR #9", err)
+	}
+}
+
+// countingIndex counts how often each branch's closed-PR index is loaded.
+type countingIndex struct {
+	*fakeRepo
+	loads map[string]int
+}
+
+func (s countingIndex) ClosedPullsByBase(base string, page int) ([]PullRequest, error) {
+	if page == 1 {
+		s.loads[base]++
+	}
+	return s.fakeRepo.ClosedPullsByBase(base, page)
+}
+
+func TestWalkIndexLoadedOncePerChain(t *testing.T) {
+	r := newFakeRepo()
+	stageChain(r)
+	r.noCommitLookup = true
+	r.commitMsg("d1", "IT-3 three", "m0")
+	r.commitMsg("d2", "IT-4 four", "d1")
+	r.commitMsg("d3", "Merge branch 'stage' into dev", "d2", "s2")
+	r.pr(PullRequest{Number: 3, BaseRef: "dev", HeadRef: "IT-3/c", HeadSHA: "h3", Merged: true, MergeCommitSHA: "d1"})
+	r.pr(PullRequest{Number: 4, BaseRef: "dev", HeadRef: "IT-4/d", HeadSHA: "h4", Merged: true, MergeCommitSHA: "d2"})
+	src := countingIndex{r, map[string]int{}}
+	res, err := walkWith(r, src, "m0", "d3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantNumbers(t, res, 3, 4, 10, 11)
+	if want := map[string]int{"dev": 1, "stage": 1}; !maps.Equal(src.loads, want) {
+		t.Errorf("index loads = %v, want %v", src.loads, want)
 	}
 }
 

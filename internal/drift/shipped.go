@@ -167,12 +167,14 @@ func (d *Detector) hasOwnCommits(s, pr PullRequest, mergeCommit Commit) (bool, e
 }
 
 // mergedIntoBase lists merged PRs into d.Base from headRef, cached per ref.
+// A list that cannot be read in full counts as empty: the rules that need it
+// do not hold, so the PR is reported.
 func (d *Detector) mergedIntoBase(headRef string) ([]PullRequest, error) {
 	if ps, ok := d.closedByHead[headRef]; ok {
 		return ps, nil
 	}
 	all, err := d.Src.ClosedPullsByHead(d.Base, headRef)
-	if err != nil && !errors.Is(err, ErrNotFound) {
+	if err != nil && !unknown(err) {
 		return nil, err
 	}
 	// Re-checked here: if the head filter were ever ignored, every PR into the

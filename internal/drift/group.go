@@ -1,6 +1,7 @@
 package drift
 
 import (
+	"cmp"
 	"regexp"
 	"slices"
 	"sort"
@@ -11,8 +12,8 @@ type GroupKind int
 
 const (
 	KindTicket  GroupKind = iota // Key is a ticket ID
-	KindBranch                   // Key is a branch name with no ticket ID
-	KindCommits                  // Key is the author's login, or git name when there is none
+	KindBranch                   // Key is a branch name with no ticket ID, or "(no branch)"
+	KindCommits                  // Key is the author's login, else git name, else "unknown"
 )
 
 type Item struct {
@@ -40,9 +41,25 @@ func (g Group) Targets() []string {
 	return out
 }
 
+// Readable keys for groups that would otherwise have an empty one. Git
+// refuses a space in a branch name, so "(no branch)" cannot be a real one.
+const (
+	noBranchKey      = "(no branch)"
+	unknownAuthorKey = "unknown"
+)
+
+// Commit groups are keyed by what identifies the author, so a git name that
+// reads like someone else's login never merges two people into one group.
+const (
+	byLogin = iota
+	byName
+	byNobody
+)
+
 type groupID struct {
-	kind GroupKind
-	key  string
+	kind  GroupKind
+	key   string
+	space int // byLogin, byName or byNobody; always byLogin outside commit groups
 }
 
 // Groups returns ticket groups sorted by Key, then branch groups, then commit groups.
@@ -51,8 +68,8 @@ type groupID struct {
 func Groups(results []TargetResult, re *regexp.Regexp) []Group {
 	byID := map[groupID]*Group{}
 	var order []*Group
-	get := func(kind GroupKind, key string) *Group {
-		id := groupID{kind, key}
+	get := func(kind GroupKind, key string, space int) *Group {
+		id := groupID{kind, key, space}
 		g := byID[id]
 		if g == nil {
 			g = &Group{Kind: kind, Key: key}
@@ -74,25 +91,32 @@ func Groups(results []TargetResult, re *regexp.Regexp) []Group {
 			keys := TicketIDs(re, p.HeadRef)
 			kind := KindTicket
 			if len(keys) == 0 {
-				keys, kind = []string{p.HeadRef}, KindBranch
+				keys, kind = []string{cmp.Or(p.HeadRef, noBranchKey)}, KindBranch
 			}
 			for _, k := range keys {
-				g := get(kind, k)
+				g := get(kind, k, byLogin)
 				g.Items = append(g.Items, Item{Target: r.Target, PR: &p})
 				addLogin(g, p.AuthorLogin)
 			}
 		}
 		for _, c := range r.Unattributed {
-			key := c.AuthorLogin
-			if key == "" {
-				key = c.AuthorName
+			key, space := c.AuthorLogin, byLogin
+			switch {
+			case c.AuthorLogin != "":
+			case c.AuthorName != "":
+				key, space = c.AuthorName, byName
+			default:
+				key, space = unknownAuthorKey, byNobody
 			}
-			g := get(KindCommits, key)
+			g := get(KindCommits, key, space)
 			g.Items = append(g.Items, Item{Target: r.Target, Commit: &c})
-			if c.AuthorLogin != "" {
+			switch space {
+			case byLogin:
 				addLogin(g, c.AuthorLogin)
-			} else if !slices.Contains(g.Names, c.AuthorName) {
-				g.Names = append(g.Names, c.AuthorName)
+			case byName:
+				if !slices.Contains(g.Names, c.AuthorName) {
+					g.Names = append(g.Names, c.AuthorName)
+				}
 			}
 		}
 	}

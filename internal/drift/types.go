@@ -60,5 +60,7 @@ type Detector struct {
 	// applies only to branches that carry one; nil disables that rule.
 	TicketPattern *regexp.Regexp
 
-	closedByHead map[string][]PullRequest // merged PRs into Base, per head ref
+	// closedByHead caches merged PRs into Base, per head ref. It is written
+	// without a lock, so one Detector must not run Target concurrently.
+	closedByHead map[string][]PullRequest
 }

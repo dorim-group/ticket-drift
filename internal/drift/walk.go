@@ -2,9 +2,11 @@ package drift
 
 import (
 	"errors"
+	"fmt"
 	"regexp"
 	"slices"
 	"strconv"
+	"strings"
 )
 
 type walkResult struct {
@@ -49,6 +51,8 @@ type walker struct {
 // that are also on the target, and a target fast-forwarded to a branch that
 // had merged the target in keeps its previous history only there. The
 // commits a squash-merged long-lived branch carried are added to ahead.
+// Errors name the commit or PR; Target, the only caller, adds the "drift:"
+// prefix and the target.
 func (d *Detector) walk(target, tip string, ahead map[string]Commit) (walkResult, error) {
 	w := &walker{
 		d: d, ahead: ahead,
@@ -92,6 +96,13 @@ func (w *walker) classify(c Commit, chain string) error {
 	}
 	merged := w.mergedIn(c)
 	isMerge := len(c.Parents) > 1
+	// Only a commit that brought something in can carry a long-lived branch; a
+	// cherry-picked or squashed "Merge branch 'stage'" falls through to
+	// unattributed.
+	var carried string
+	if !found && len(merged) > 0 {
+		carried = w.d.longLivedMerge(c.Message)
+	}
 
 	switch {
 	case found && w.d.longLived(pr.HeadRef) && len(merged) > 0:
@@ -109,11 +120,9 @@ func (w *walker) classify(c Commit, chain string) error {
 		w.descend(slices.DeleteFunc(merged, func(p string) bool { return p == pr.HeadSHA }), chain)
 	case isMerge && len(merged) == 0:
 		w.res.BackMerges = append(w.res.BackMerges, c.SHA)
-	case len(merged) > 0 && w.d.longLivedMerge(c.Message) != "":
-		// Only a commit that brought something in can carry it; a cherry-picked
-		// or squashed "Merge branch 'stage'" falls through to unattributed.
+	case carried != "":
 		w.res.Carriers = append(w.res.Carriers, c.SHA)
-		w.descend(merged, w.d.longLivedMerge(c.Message))
+		w.descend(merged, carried)
 	default:
 		w.res.Unattributed = append(w.res.Unattributed, c)
 		w.descend(merged, chain)
@@ -135,7 +144,7 @@ func (w *walker) expand(c Commit, pr PullRequest) error {
 		w.addPR(pr)
 		return nil
 	case err != nil:
-		return err
+		return fmt.Errorf("#%d: list what %s carried: %w", pr.Number, pr.HeadRef, err)
 	case len(extra) == 0:
 		// Everything it carried is already on the base.
 		w.res.BackMerges = append(w.res.BackMerges, c.SHA)
@@ -193,7 +202,7 @@ func (d *Detector) longLivedMerge(msg string) string {
 func (d *Detector) findPR(c Commit, chain string, indexes map[string]map[string]PullRequest) (PullRequest, bool, error) {
 	prs, err := d.Src.PullsForCommit(c.SHA)
 	if err != nil && !errors.Is(err, ErrNotFound) {
-		return PullRequest{}, false, err
+		return PullRequest{}, false, fmt.Errorf("commit %s: pull requests: %w", c.SHA, err)
 	}
 	for _, p := range prs {
 		if p.Merged && p.BaseRef == chain && p.MergeCommitSHA == c.SHA {
@@ -214,7 +223,7 @@ func (d *Detector) findPR(c Commit, chain string, indexes map[string]map[string]
 				return p, true, nil
 			}
 		case !errors.Is(err, ErrNotFound):
-			return PullRequest{}, false, err
+			return PullRequest{}, false, fmt.Errorf("commit %s: #%d: %w", c.SHA, n, err)
 		}
 	}
 
@@ -224,7 +233,7 @@ func (d *Detector) findPR(c Commit, chain string, indexes map[string]map[string]
 		for page := 1; page <= indexPages; page++ {
 			ps, err := d.Src.ClosedPullsByBase(chain, page)
 			if err != nil {
-				return PullRequest{}, false, err
+				return PullRequest{}, false, fmt.Errorf("commit %s: closed pull requests into %s, page %d: %w", c.SHA, chain, page, err)
 			}
 			if len(ps) == 0 {
 				break
@@ -241,14 +250,10 @@ func (d *Detector) findPR(c Commit, chain string, indexes map[string]map[string]
 	return p, ok, nil
 }
 
+// messagePRNumber returns the PR number the message's first line names, or 0.
+// A number too large for an int names no PR.
 func messagePRNumber(msg string) int {
-	first := msg
-	for i := range msg {
-		if msg[i] == '\n' {
-			first = msg[:i]
-			break
-		}
-	}
+	first, _, _ := strings.Cut(msg, "\n")
 	m := mergePRRe.FindStringSubmatch(first)
 	if m == nil {
 		m = squashPRRe.FindStringSubmatch(first)
@@ -256,6 +261,9 @@ func messagePRNumber(msg string) int {
 	if m == nil {
 		return 0
 	}
-	n, _ := strconv.Atoi(m[1])
+	n, err := strconv.Atoi(m[1])
+	if err != nil {
+		return 0
+	}
 	return n
 }

@@ -133,12 +133,26 @@ func (r *fakeRepo) PullsForCommit(sha string) ([]PullRequest, error) {
 		if err != nil {
 			continue
 		}
-		// Only a true merge commit has a base-side first parent to subtract;
-		// squash and rebase merges keep the head commits associated.
+		// GitHub lists only the PR's own commits; the fake approximates them as
+		// the head's history minus the target's history at the merge. A true
+		// merge commit's first parent is that target history. When the merge
+		// commit is the head itself (a target fast-forwarded to a branch that
+		// had merged the target in), the first parent is the feature and the
+		// later parents are the target. A squash or rebase merge has a single
+		// parent and nothing is subtracted, so every commit reachable from the
+		// head counts as the PR's, base history included: imprecise, but the
+		// walk only asks about commits in the ahead set, and the tests keep
+		// squash heads off the target's own history.
 		if mc, ok := r.commits[p.MergeCommitSHA]; ok && len(mc.Parents) > 1 {
-			if first, err := r.reach(mc.Parents[0]); err == nil {
-				for s := range first {
-					delete(head, s)
+			targetSide := mc.Parents[:1]
+			if mc.SHA == p.HeadSHA {
+				targetSide = mc.Parents[1:]
+			}
+			for _, t := range targetSide {
+				if before, err := r.reach(t); err == nil {
+					for s := range before {
+						delete(head, s)
+					}
 				}
 			}
 		}
@@ -182,6 +196,27 @@ func (r *fakeRepo) ClosedPullsByHead(base, headRef string) ([]PullRequest, error
 		}
 	}
 	return out, nil
+}
+
+// In the fast-forwarded-target graph the PR's merge commit x1 is its own head:
+// its first parent f1 is the feature and its second, d2, the target's old
+// history. GitHub lists f1 as the PR's commit and d2 as PR #2's only.
+func TestFakePullsForCommitFastForwardedFeature(t *testing.T) {
+	r := fastForwardRepo("Merge branch 'dev' into IT-5/foo")
+	r.pr(PullRequest{Number: 5, BaseRef: "dev", HeadRef: "IT-5/foo", HeadSHA: "x1", Merged: true, MergeCommitSHA: "x1"})
+	for sha, want := range map[string][]int{"f1": {5}, "x1": {5}, "d2": {2}} {
+		prs, err := r.PullsForCommit(sha)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []int
+		for _, p := range prs {
+			got = append(got, p.Number)
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("PullsForCommit(%s) = %v, want %v", sha, got, want)
+		}
+	}
 }
 
 func TestFakeRepoReachability(t *testing.T) {

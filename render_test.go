@@ -425,12 +425,15 @@ func TestRenderAssignees(t *testing.T) {
 		"no assignee, no opener":     {nil, nil, "@ghost", nil},
 		"nameless and unmapped":      {[]clickup.Assignee{{Email: "new@x.io"}}, []string{"opener"}, "<@999>", []string{"999"}},
 		"no email":                   {[]clickup.Assignee{{Name: "Ann Lee"}}, []string{"opener"}, "Ann Lee <@999>", []string{"999"}},
+		"email padded":               {[]clickup.Assignee{{Name: "Ann Lee", Email: " ann@x.io "}}, nil, "<@111>", []string{"111"}},
+		"long name":                  {[]clickup.Assignee{{Name: strings.Repeat("я", 500)}}, nil, strings.Repeat("я", 100) + "…", nil},
+		"one opener, two logins":     {nil, []string{"opener", "opener2"}, "<@999>", []string{"999"}},
 		"same person twice":          {[]clickup.Assignee{ann, ann}, nil, "<@111>", []string{"111"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			in := baseInput(ticketGroup(tc.logins...))
 			in.Task = &clickup.Task{Name: "N", URL: "u", Status: "s", Assignees: tc.assignees}
-			in.Users = map[string]string{"opener": "999"}
+			in.Users = map[string]string{"opener": "999", "opener2": "999"}
 			in.ClickUpUsers = map[string]string{"ann@x.io": "111", "bob@x.io": "222"}
 			got, ids := renderGroup(in)
 			l := lines(got)
@@ -448,9 +451,13 @@ func TestRenderManyLongAssigneeNamesFitLimit(t *testing.T) {
 	in := baseInput(ticketGroup("opener"))
 	in.Task = &clickup.Task{Name: "N", URL: "u", Status: "s"}
 	for range 50 {
-		in.Task.Assignees = append(in.Task.Assignees, clickup.Assignee{Name: strings.Repeat("😀", 500)})
+		in.Task.Assignees = append(in.Task.Assignees, clickup.Assignee{Name: fmt.Sprintf("%02d", len(in.Task.Assignees)) + strings.Repeat("😀", 500)})
 	}
-	got, _ := renderGroup(in)
+	in.Users = map[string]string{"opener": "999"}
+	got, ids := renderGroup(in)
+	if !reflect.DeepEqual(ids, []string{"999"}) || !strings.Contains(got, " <@999> …") {
+		t.Errorf("the opener's ping was cut: ids = %v, content = %q", ids, got)
+	}
 	if n := discordUnits(got); n > maxMessageUnits {
 		t.Errorf("length = %d units, want at most %d", n, maxMessageUnits)
 	}

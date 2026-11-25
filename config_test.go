@@ -360,6 +360,9 @@ func TestConfigUsersListErrors(t *testing.T) {
 			if err == nil {
 				t.Fatal("want an error")
 			}
+			if strings.Contains(err.Error(), "x.io") {
+				t.Errorf("err = %v shows an email", err)
+			}
 			for _, w := range append(tc.want, "TICKET_DRIFT_USERS") {
 				if !strings.Contains(err.Error(), w) {
 					t.Errorf("err = %v, want it to contain %q", err, w)

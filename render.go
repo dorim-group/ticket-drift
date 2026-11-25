@@ -70,9 +70,10 @@ func renderGroup(in renderInput) (content string, mentionIDs []string) {
 		if len(items) > 0 {
 			shown = []string{fmt.Sprintf(droppedItemsFmt, len(items))}
 		}
-		for k := len(mentions) - 1; k >= 0; k-- {
-			if content = build(shown, mentions[:k], true); fits(content) {
-				return content, idsOf(mentions[:k])
+		for left := mentions; len(left) > 0; {
+			left = dropMention(left)
+			if content = build(shown, left, true); fits(content) {
+				return content, idsOf(left)
 			}
 		}
 	}
@@ -218,16 +219,31 @@ func authorMentions(in renderInput) []mention {
 			continue
 		}
 		seen = append(seen, lower)
+		m := mention{text: "@" + login}
 		if id, ok := in.Users[lower]; ok {
-			out = append(out, mention{"<@" + id + ">", id})
-		} else {
-			out = append(out, mention{text: "@" + login})
+			m = mention{"<@" + id + ">", id}
+		}
+		if !slices.Contains(out, m) {
+			out = append(out, m)
 		}
 	}
 	for _, n := range in.Group.Names {
 		out = append(out, mention{text: oneLine(n)})
 	}
 	return out
+}
+
+// dropMention drops the last entry that pings nobody, or the last one when
+// every entry pings.
+func dropMention(m []mention) []mention {
+	i := len(m) - 1
+	for j := i; j >= 0; j-- {
+		if m[j].id == "" {
+			i = j
+			break
+		}
+	}
+	return slices.Delete(slices.Clone(m), i, i+1)
 }
 
 func mentionText(m []mention, ellipsis bool) string {

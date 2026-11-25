@@ -23,7 +23,7 @@ type Task struct {
 	Assignees                       []Assignee
 }
 
-// Assignee's Name is "" for a member who has not finished signing up.
+// Assignee's Name is "" for a member who has no name, or whose name is the email.
 type Assignee struct{ Name, Email string }
 
 var ErrNotFound = errors.New("clickup: task not found")
@@ -106,6 +106,9 @@ func (c *Client) TaskByCustomID(id string) (Task, error) {
 		}
 		task := Task{ID: out.ID, CustomID: out.CustomID, Name: out.Name, URL: out.URL, Status: out.Status.Status}
 		for _, a := range out.Assignees {
+			if strings.EqualFold(a.Username, a.Email) {
+				a.Username = ""
+			}
 			task.Assignees = append(task.Assignees, Assignee{Name: a.Username, Email: a.Email})
 		}
 		return task, nil

@@ -129,14 +129,14 @@ assignee is in the list. Branches without a ticket mention the pull request
 authors, commits without a pull request their authors; both are matched by
 GitHub login, and a login not in the list is written as plain `@login`.
 
-Emails are never posted, printed or written to the report. Only people in the
+Emails are never posted or written to the report. Only people in the
 list can be pinged, so a branch name or ticket title can never trigger
 `@everyone`. Keep the list in a shared CircleCI context so the repos need no
 per-repo file.
 
-An unknown field, a bad Discord ID, or an email or login used by two entries
-stops the run at start-up with an error naming the entry: Discord would refuse
-every message that mentions a bad ID.
+An unknown field, a bad Discord ID, an entry with neither an email nor a
+login, or an email or login used by two entries stops the run at start-up with
+an error naming the entry.
 
 The older form, `{"github-login": "discord-user-id"}`, is still accepted; with
 it no assignee can be matched. Versions before this list existed (v0.1.0)
@@ -167,8 +167,9 @@ an unknown command. CI should read the report, not the exit code, for detail.
 `-out-json` writes the pinned SHAs; per target the ahead count, shipped pull
 requests with `matched_by` (`ancestor`, `head`, `branch`, `sibling`), lost
 pull requests, ignored back-merges, carriers descended into, unattributed
-commits and the reset outcome; and every group with its message and whether
-it was posted. It is written on failure too, filled as far as the run got.
+commits and the reset outcome; and every group with its `people` (PR and
+commit authors), `assignees` (ClickUp names), message and whether it was
+posted. It is written on failure too, filled as far as the run got.
 
 | reset outcome | meaning |
 |---|---|
@@ -195,7 +196,7 @@ CI only when you move the pin:
           - run:
               name: Reset dev and stage to main
               command: |
-                go install github.com/dorim-group/ticket-drift@v0.1.0
+                go install github.com/dorim-group/ticket-drift@v0.2.0
                 ticket-drift sync -out-json report.json
           - store_artifacts:
               path: report.json

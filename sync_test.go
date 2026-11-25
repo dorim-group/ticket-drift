@@ -767,7 +767,7 @@ func TestSyncTagsClickUpAssignees(t *testing.T) {
 	e := newSyncEnv(t)
 	e.cfg.ClickUpUsers = map[string]string{"kim@x.io": "777"}
 	task := e.cu.tasks["IT-1"]
-	task.Assignees = []clickup.Assignee{{Name: "Kim", Email: "kim@x.io"}, {Name: "Lee", Email: "lee@x.io"}}
+	task.Assignees = []clickup.Assignee{{Name: "Kim", Email: "kim@x.io"}, {Name: "Lee", Email: "lee@x.io"}, {Email: "new@x.io"}}
 	e.cu.tasks["IT-1"] = task
 	e.gh.lose("dev", lostPR{1, "IT-1/a", "ann"}, lostPR{2, "IT-2/b", "ann"}, lostPR{3, "no-ticket", "ann"})
 	e.gh.branches["stage"] = mainSHA

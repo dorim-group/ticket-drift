@@ -3,16 +3,16 @@
 Resets `dev` and `stage` to `main` after every merge to `main`, so hotfixes
 that land on `main` alone stop turning every later merge into a conflict.
 Before it resets, it works out which work on those branches has not reached
-`main` and would be wiped, and posts one Discord message per ticket to the
-people who wrote it. If anything before the reset fails — GitHub, ClickUp, a
+`main` and would be wiped, and posts one Discord message per ticket,
+tagging its ClickUp assignees. If anything before the reset fails — GitHub, ClickUp, a
 single Discord message — nothing is reset.
 
     snapshot ─ detect ─ look up ─ notify ─ reset ─ correct / summarise
        │         │         │         │        │
        │         │         │         │        └─ force-update dev, stage to the pinned main,
        │         │         │         │           only if the branch did not gain new work
-       │         │         │         └─ one Discord message per ticket, mentioning its authors
-       │         │         └─ ClickUp title, link and status, read-only
+       │         │         │         └─ one Discord message per ticket, mentioning its assignees
+       │         │         └─ ClickUp title, link, status and assignees, read-only
        │         └─ PRs and commits on dev/stage whose code is not on main
        └─ pin the tips of main, dev and stage once
 
@@ -46,7 +46,7 @@ stop `stage`, and the run then exits `1`.
 | `-base` | `main` | the branch the targets are reset to |
 | `-targets` | `dev,stage` | comma-separated branches to reset; a missing one is skipped |
 | `-ticket-pattern` | `IT-\d+` | Go regexp for ticket IDs in branch names, matched case-insensitively |
-| `-users` | — | path to a JSON file mapping GitHub logins to Discord user IDs; overrides `TICKET_DRIFT_USERS` |
+| `-users` | — | path to a JSON file listing people and their Discord user IDs; overrides `TICKET_DRIFT_USERS` |
 | `-out-json` | — | write the full report to this file, also when the run fails |
 | `-dry-run` | false | look everything up and print the messages and resets; post and change nothing |
 | `-no-reset` | false | post the messages, worded "will be reset", and reset nothing |
@@ -74,7 +74,7 @@ would print:
 | `TICKET_DRIFT_APP_INSTALLATION_ID` | installation ID (the number at the end of the install URL) |
 | `TICKET_DRIFT_APP_PRIVATE_KEY` | the App's PEM, base64-encoded so it survives an env var |
 | `DISCORD_WEBHOOK_URL` | channel webhook. Required unless `-dry-run`. If unset, `DISCORD_WEBHOOK` — the variable the repos' CircleCI contexts already carry for deploy notifications — is used |
-| `TICKET_DRIFT_USERS` | JSON object `{"github-login": "discord-user-id"}` |
+| `TICKET_DRIFT_USERS` | JSON list of people, see [below](#ticket_drift_users) |
 | `CLICKUP_API_TOKEN`, `CLICKUP_TEAM_ID` | required in every mode, including `-dry-run`; the run refuses to start without them |
 
 ### Discord messages
@@ -104,19 +104,43 @@ correction names the branch and the reason.
 
 ### `TICKET_DRIFT_USERS`
 
-People are mentioned by Discord user ID, looked up by the pull request
-author's GitHub login (compared case-insensitively):
+A JSON list with one entry per person:
 
-    {"octocat": "111111111111111111", "hubot": "222222222222222222"}
+    [
+      {
+        "name": "Octo Cat",
+        "discord_id": "111111111111111111",
+        "clickup_email": "octo@example.com",
+        "github_login": "octocat"
+      }
+    ]
 
-A login missing from the map is written as plain `@login`; the message still
-posts. Only the mapped users can be pinged, so a branch name or ticket title
-can never trigger `@everyone`. Keep the map in a shared CircleCI context so
-the repos need no per-repo file.
+| field | |
+|---|---|
+| `discord_id` | required; 15 to 21 digits, quoted |
+| `clickup_email`, `github_login` | at least one; compared case-insensitively |
+| `name` | optional, for the reader and error messages |
 
-Every value must be a Discord user ID (15 to 21 digits); anything else, such
-as `@bob`, stops the run at start-up with an error naming the login, because
-Discord would refuse every message that mentions it.
+A ticket message mentions every ClickUp assignee of the ticket, matched by
+email. One who is not in the list is written by ClickUp name, without a ping.
+The authors of the pull requests are mentioned instead when the ticket has no
+assignee or ClickUp does not know it, and in addition to the names when no
+assignee is in the list. Branches without a ticket mention the pull request
+authors, commits without a pull request their authors; both are matched by
+GitHub login, and a login not in the list is written as plain `@login`.
+
+Emails are never posted, printed or written to the report. Only people in the
+list can be pinged, so a branch name or ticket title can never trigger
+`@everyone`. Keep the list in a shared CircleCI context so the repos need no
+per-repo file.
+
+An unknown field, a bad Discord ID, or an email or login used by two entries
+stops the run at start-up with an error naming the entry: Discord would refuse
+every message that mentions a bad ID.
+
+The older form, `{"github-login": "discord-user-id"}`, is still accepted; with
+it no assignee can be matched. Versions before this list existed (v0.1.0)
+reject the list, so update the tool first.
 
 To get a Discord user ID: User Settings → Advanced → turn on **Developer
 Mode**, then right-click the person → **Copy User ID**.

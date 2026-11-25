@@ -18,7 +18,13 @@ const (
 	maxAttempts    = 4
 )
 
-type Task struct{ ID, CustomID, Name, URL, Status string }
+type Task struct {
+	ID, CustomID, Name, URL, Status string
+	Assignees                       []Assignee
+}
+
+// Assignee's Name is "" for a member who has not finished signing up.
+type Assignee struct{ Name, Email string }
 
 var ErrNotFound = errors.New("clickup: task not found")
 
@@ -87,6 +93,10 @@ func (c *Client) TaskByCustomID(id string) (Task, error) {
 			Status   struct {
 				Status string `json:"status"`
 			} `json:"status"`
+			Assignees []struct {
+				Username string `json:"username"`
+				Email    string `json:"email"`
+			} `json:"assignees"`
 		}
 		if err := json.Unmarshal(raw, &out); err != nil {
 			return Task{}, fmt.Errorf("clickup: %s: decode response: %w", id, err)
@@ -94,7 +104,11 @@ func (c *Client) TaskByCustomID(id string) (Task, error) {
 		if out.ID == "" {
 			return Task{}, fmt.Errorf("clickup: %s: response has no task id", id)
 		}
-		return Task{ID: out.ID, CustomID: out.CustomID, Name: out.Name, URL: out.URL, Status: out.Status.Status}, nil
+		task := Task{ID: out.ID, CustomID: out.CustomID, Name: out.Name, URL: out.URL, Status: out.Status.Status}
+		for _, a := range out.Assignees {
+			task.Assignees = append(task.Assignees, Assignee{Name: a.Username, Email: a.Email})
+		}
+		return task, nil
 	case status >= 400 && status <= 499:
 		return Task{}, fmt.Errorf("clickup: %s: status %d: %w", id, status, ErrNotFound)
 	default:

@@ -100,7 +100,7 @@ func runSync(cfg config, gh repoAPI, cu ticketLookup, dc notifier, out io.Writer
 		rep.Groups = append(rep.Groups, newGroupReport(g))
 		inputs[i] = renderInput{
 			Owner: cfg.Owner, Repo: cfg.Repo, Base: cfg.Base, Group: g,
-			Users: cfg.Users, WillReset: !cfg.NoReset,
+			Users: cfg.Users, ClickUpUsers: cfg.ClickUpUsers, WillReset: !cfg.NoReset,
 		}
 	}
 	// A lookup reads any 4xx as "no such ticket", so first prove the token and
@@ -123,6 +123,11 @@ func runSync(cfg config, gh repoAPI, cu ticketLookup, dc notifier, out io.Writer
 		default:
 			inputs[i].Task = &task
 			rep.Groups[i].ClickUpFound, rep.Groups[i].ClickUpURL = true, task.URL
+			for _, a := range task.Assignees {
+				if a.Name != "" {
+					rep.Groups[i].Assignees = append(rep.Groups[i].Assignees, a.Name)
+				}
+			}
 		}
 	}
 

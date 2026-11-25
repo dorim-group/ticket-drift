@@ -309,3 +309,62 @@ func TestConfigTargetsDeduplicated(t *testing.T) {
 		t.Errorf("targets = %v, want [dev stage]", cfg.Targets)
 	}
 }
+
+func TestConfigUsersList(t *testing.T) {
+	list := `[
+		{"name":"Ann","discord_id":"111111111111111111","clickup_email":" Ann@X.io ","github_login":"Ann-Gh"},
+		{"discord_id":"222222222222222222","clickup_email":"bob@x.io"},
+		{"discord_id":"333333333333333333","github_login":"carol"}
+	]`
+	env := baseEnv()
+	env["TICKET_DRIFT_USERS"] = list
+	fromEnv, err := parse(t, env, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fromFile, err := parse(t, baseEnv(), map[string]string{"u.json": list}, "-users", "u.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, cfg := range []config{fromEnv, fromFile} {
+		if want := map[string]string{"ann-gh": "111111111111111111", "carol": "333333333333333333"}; !reflect.DeepEqual(cfg.Users, want) {
+			t.Errorf("users = %v, want %v", cfg.Users, want)
+		}
+		if want := map[string]string{"ann@x.io": "111111111111111111", "bob@x.io": "222222222222222222"}; !reflect.DeepEqual(cfg.ClickUpUsers, want) {
+			t.Errorf("ClickUp users = %v, want %v", cfg.ClickUpUsers, want)
+		}
+	}
+}
+
+func TestConfigUsersListErrors(t *testing.T) {
+	const id = `"discord_id":"111111111111111111"`
+	for name, tc := range map[string]struct {
+		raw  string
+		want []string
+	}{
+		"unknown field":     {`[{` + id + `,"github_login":"a"},{"name":"Bob","discordid":"1"}]`, []string{"entry 2", "discordid"}},
+		"numeric id":        {`[{"discord_id":111111111111111111,"github_login":"a"}]`, []string{"entry 1", "discord_id"}},
+		"bad id":            {`[{"name":"Bob","discord_id":"@bob","github_login":"b"}]`, []string{"entry 1 (Bob)", "@bob"}},
+		"missing id":        {`[{"name":"Bob","github_login":"b"}]`, []string{"entry 1 (Bob)", "15 to 21 digits"}},
+		"null entry":        {`[null]`, []string{"entry 1"}},
+		"nobody to match":   {`[{"name":"Bob",` + id + `,"github_login":" "}]`, []string{"entry 1 (Bob)", "clickup_email", "github_login"}},
+		"login used twice":  {`[{"name":"A",` + id + `,"github_login":"Bob"},{"name":"B",` + id + `,"github_login":"bob"}]`, []string{"entry 1 (A)", "entry 2 (B)", "github_login"}},
+		"email used twice":  {`[{"name":"A",` + id + `,"clickup_email":"b@x.io"},{"name":"B",` + id + `,"clickup_email":"B@x.io"}]`, []string{"entry 1 (A)", "entry 2 (B)", "clickup_email"}},
+		"data after list":   {`[{` + id + `,"github_login":"a"}] x`, []string{"TICKET_DRIFT_USERS"}},
+		"unterminated list": {`[{` + id, []string{"TICKET_DRIFT_USERS"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			env := baseEnv()
+			env["TICKET_DRIFT_USERS"] = tc.raw
+			_, err := parse(t, env, nil)
+			if err == nil {
+				t.Fatal("want an error")
+			}
+			for _, w := range append(tc.want, "TICKET_DRIFT_USERS") {
+				if !strings.Contains(err.Error(), w) {
+					t.Errorf("err = %v, want it to contain %q", err, w)
+				}
+			}
+		})
+	}
+}

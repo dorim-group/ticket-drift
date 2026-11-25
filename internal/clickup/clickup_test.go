@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -34,14 +35,15 @@ func TestTaskByCustomID(t *testing.T) {
 		if got := r.Header.Get("Authorization"); got != "tok" {
 			t.Errorf("Authorization = %q, want %q", got, "tok")
 		}
-		_, _ = w.Write([]byte(`{"id":"abc1","custom_id":"IT-10249","name":"Fix login","url":"https://app.clickup.com/t/abc1","status":{"status":"in review"}}`))
+		_, _ = w.Write([]byte(`{"id":"abc1","custom_id":"IT-10249","name":"Fix login","url":"https://app.clickup.com/t/abc1","status":{"status":"in review"},"assignees":[{"id":1,"username":"Ann Lee","email":"ann@x.io"},{"id":2,"username":null,"email":"bob@x.io"}]}`))
 	})
 	got, err := c.TaskByCustomID("IT-10249")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Task{ID: "abc1", CustomID: "IT-10249", Name: "Fix login", URL: "https://app.clickup.com/t/abc1", Status: "in review"}
-	if got != want {
+	want := Task{ID: "abc1", CustomID: "IT-10249", Name: "Fix login", URL: "https://app.clickup.com/t/abc1", Status: "in review",
+		Assignees: []Assignee{{Name: "Ann Lee", Email: "ann@x.io"}, {Email: "bob@x.io"}}}
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %+v, want %+v", got, want)
 	}
 }

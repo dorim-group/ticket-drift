@@ -62,7 +62,8 @@ type groupReport struct {
 	Kind         string   `json:"kind"` // ticket, branch, commits
 	Key          string   `json:"key"`
 	Targets      []string `json:"targets"`
-	People       []string `json:"people"`
+	People       []string `json:"people"`    // PR and commit authors
+	Assignees    []string `json:"assignees"` // ClickUp names
 	ClickUpFound bool     `json:"clickup_found"`
 	ClickUpURL   string   `json:"clickup_url"`
 	Message      string   `json:"message"`
@@ -123,7 +124,7 @@ func newGroupReport(g drift.Group) groupReport {
 		drift.KindCommits: "commits",
 	}[g.Kind]
 	people := append(append([]string{}, g.Logins...), g.Names...)
-	return groupReport{Kind: kind, Key: g.Key, Targets: append([]string{}, g.Targets()...), People: people}
+	return groupReport{Kind: kind, Key: g.Key, Targets: append([]string{}, g.Targets()...), People: people, Assignees: []string{}}
 }
 
 func writeReport(path string, r report) error {

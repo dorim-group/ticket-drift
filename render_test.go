@@ -406,3 +406,52 @@ func TestRenderCommitMessageTrailingCR(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+func TestRenderAssignees(t *testing.T) {
+	ann := clickup.Assignee{Name: "Ann Lee", Email: "Ann@x.io"}
+	bob := clickup.Assignee{Name: "Bob Ray", Email: "bob@x.io"}
+	ivan := clickup.Assignee{Name: "Ivan\nPetrov", Email: "ivan@x.io"}
+	for name, tc := range map[string]struct {
+		assignees []clickup.Assignee
+		logins    []string
+		want      string
+		ids       []string
+	}{
+		"all mapped":                 {[]clickup.Assignee{ann, bob}, []string{"opener"}, "<@111> <@222>", []string{"111", "222"}},
+		"one mapped":                 {[]clickup.Assignee{ann, ivan}, []string{"opener"}, "<@111> Ivan Petrov", []string{"111"}},
+		"none mapped":                {[]clickup.Assignee{ivan}, []string{"opener"}, "Ivan Petrov <@999>", []string{"999"}},
+		"none mapped, opener absent": {[]clickup.Assignee{ivan}, nil, "Ivan Petrov", nil},
+		"no assignee":                {nil, []string{"opener"}, "<@999>", []string{"999"}},
+		"no assignee, no opener":     {nil, nil, "@ghost", nil},
+		"nameless and unmapped":      {[]clickup.Assignee{{Email: "new@x.io"}}, []string{"opener"}, "<@999>", []string{"999"}},
+		"no email":                   {[]clickup.Assignee{{Name: "Ann Lee"}}, []string{"opener"}, "Ann Lee <@999>", []string{"999"}},
+		"same person twice":          {[]clickup.Assignee{ann, ann}, nil, "<@111>", []string{"111"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			in := baseInput(ticketGroup(tc.logins...))
+			in.Task = &clickup.Task{Name: "N", URL: "u", Status: "s", Assignees: tc.assignees}
+			in.Users = map[string]string{"opener": "999"}
+			in.ClickUpUsers = map[string]string{"ann@x.io": "111", "bob@x.io": "222"}
+			got, ids := renderGroup(in)
+			l := lines(got)
+			if l[len(l)-1] != tc.want || !reflect.DeepEqual(ids, tc.ids) {
+				t.Errorf("last = %q ids = %v, want %q %v", l[len(l)-1], ids, tc.want, tc.ids)
+			}
+			if strings.Contains(got, "x.io") {
+				t.Errorf("message shows an email: %q", got)
+			}
+		})
+	}
+}
+
+func TestRenderManyLongAssigneeNamesFitLimit(t *testing.T) {
+	in := baseInput(ticketGroup("opener"))
+	in.Task = &clickup.Task{Name: "N", URL: "u", Status: "s"}
+	for range 50 {
+		in.Task.Assignees = append(in.Task.Assignees, clickup.Assignee{Name: strings.Repeat("😀", 500)})
+	}
+	got, _ := renderGroup(in)
+	if n := discordUnits(got); n > maxMessageUnits {
+		t.Errorf("length = %d units, want at most %d", n, maxMessageUnits)
+	}
+}

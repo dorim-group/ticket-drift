@@ -20,7 +20,7 @@ type config struct {
 	Base        string
 	Targets     []string
 	Pattern     *regexp.Regexp
-	Users       map[string]string // keys lower-cased
+	Users       map[string]string // GitHub login -> Discord user ID, keys lower-cased
 	OutJSON     string
 	DryRun      bool
 	NoReset     bool
@@ -30,6 +30,7 @@ type config struct {
 	AppKey                      []byte // PEM, already base64-decoded
 	DiscordWebhook              string
 	ClickUpToken, ClickUpTeamID string
+	ClickUpUsers                map[string]string // ClickUp email -> Discord user ID, keys lower-cased
 }
 
 // helpError is returned when -h is given; Usage is the text to print.
@@ -59,7 +60,7 @@ func parseConfig(args []string, getenv func(string) string, readFile func(string
 	fs.StringVar(&cfg.Base, "base", "main", "base branch")
 	fs.StringVar(&targets, "targets", "dev,stage", "comma-separated target branches")
 	fs.StringVar(&pattern, "ticket-pattern", `IT-\d+`, "ticket id regular expression")
-	fs.StringVar(&usersFile, "users", "", "JSON file mapping GitHub logins to Discord user IDs; overrides TICKET_DRIFT_USERS")
+	fs.StringVar(&usersFile, "users", "", "JSON file listing people and their Discord user IDs; overrides TICKET_DRIFT_USERS")
 	fs.StringVar(&cfg.OutJSON, "out-json", "", "write the JSON report to this path")
 	fs.BoolVar(&cfg.DryRun, "dry-run", false, "print what would be posted and reset; post nothing to Discord and reset no branch")
 	fs.BoolVar(&cfg.NoReset, "no-reset", false, "post the messages to Discord but reset no branch")
@@ -136,7 +137,7 @@ func parseConfig(args []string, getenv func(string) string, readFile func(string
 		return config{}, errors.New("config: DISCORD_WEBHOOK_URL (or DISCORD_WEBHOOK) is required unless -dry-run is set")
 	}
 
-	cfg.Users, err = loadUsers(usersFile, getenv, readFile)
+	cfg.Users, cfg.ClickUpUsers, err = loadUsers(usersFile, getenv, readFile)
 	if err != nil {
 		return config{}, err
 	}
@@ -172,26 +173,93 @@ func githubAuth(cfg *config, getenv func(string) string) error {
 	return nil
 }
 
-func loadUsers(file string, getenv func(string) string, readFile func(string) ([]byte, error)) (map[string]string, error) {
+// loadUsers reads the people list and returns Discord user IDs by GitHub login
+// and by ClickUp email, both lower-cased. The older object of login to ID is
+// still accepted; it names no ClickUp emails.
+func loadUsers(file string, getenv func(string) string, readFile func(string) ([]byte, error)) (byLogin, byEmail map[string]string, err error) {
 	var raw []byte
 	source := "TICKET_DRIFT_USERS"
 	if file != "" {
 		b, err := readFile(file)
 		if err != nil {
-			return nil, fmt.Errorf("config: read -users file: %w", err)
+			return nil, nil, fmt.Errorf("config: read -users file: %w", err)
 		}
 		raw, source = b, "-users file"
 	} else {
 		raw = []byte(getenv("TICKET_DRIFT_USERS"))
 	}
 
-	users := map[string]string{}
-	if len(bytes.TrimSpace(raw)) == 0 {
-		return users, nil
+	raw = bytes.TrimSpace(raw)
+	switch {
+	case len(raw) == 0:
+		return map[string]string{}, map[string]string{}, nil
+	case raw[0] == '[':
+		return parsePeople(raw, source)
 	}
+	byLogin, err = parseLoginMap(raw, source)
+	return byLogin, map[string]string{}, err
+}
+
+type person struct {
+	Name         string `json:"name"` // for the reader and error messages only
+	DiscordID    string `json:"discord_id"`
+	ClickUpEmail string `json:"clickup_email"`
+	GitHubLogin  string `json:"github_login"`
+}
+
+func parsePeople(raw []byte, source string) (byLogin, byEmail map[string]string, err error) {
+	var entries []json.RawMessage
+	if err := json.Unmarshal(raw, &entries); err != nil {
+		return nil, nil, fmt.Errorf("config: %s must be a JSON list of people: %w", source, err)
+	}
+	byLogin, byEmail = map[string]string{}, map[string]string{}
+	owner := map[string]string{} // field and value -> the entry that uses it
+	for i, e := range entries {
+		label := fmt.Sprintf("entry %d", i+1)
+		var p person
+		dec := json.NewDecoder(bytes.NewReader(e))
+		dec.DisallowUnknownFields() // a misspelled field would silently lose a mention
+		if err := dec.Decode(&p); err != nil {
+			return nil, nil, fmt.Errorf("config: %s: %s: %w", source, label, err)
+		}
+		if p.Name != "" {
+			label += " (" + p.Name + ")"
+		}
+		if !snowflakeRe.MatchString(p.DiscordID) {
+			return nil, nil, fmt.Errorf("config: %s: %s: discord_id is %q, want 15 to 21 digits", source, label, p.DiscordID)
+		}
+		used := false
+		for _, k := range []struct {
+			field, value string
+			ids          map[string]string
+		}{
+			{"github_login", p.GitHubLogin, byLogin},
+			{"clickup_email", p.ClickUpEmail, byEmail},
+		} {
+			v := strings.ToLower(strings.TrimSpace(k.value))
+			if v == "" {
+				continue
+			}
+			if prev, ok := owner[k.field+" "+v]; ok {
+				// The value is left out: an email has no place in a CI log.
+				return nil, nil, fmt.Errorf("config: %s: %s and %s have the same %s", source, prev, label, k.field)
+			}
+			owner[k.field+" "+v] = label
+			k.ids[v] = p.DiscordID
+			used = true
+		}
+		if !used {
+			return nil, nil, fmt.Errorf("config: %s: %s needs a clickup_email or a github_login", source, label)
+		}
+	}
+	return byLogin, byEmail, nil
+}
+
+func parseLoginMap(raw []byte, source string) (map[string]string, error) {
+	users := map[string]string{}
 	var parsed map[string]string
 	if err := json.Unmarshal(raw, &parsed); err != nil {
-		return nil, fmt.Errorf("config: %s must be a JSON object of string to string: %w", source, err)
+		return nil, fmt.Errorf("config: %s must be a JSON list of people: %w", source, err)
 	}
 	keys := make([]string, 0, len(parsed))
 	for k := range parsed {

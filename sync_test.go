@@ -762,3 +762,36 @@ func TestReportJSONShape(t *testing.T) {
 		t.Errorf("JSON contains null:\n%s", s)
 	}
 }
+
+func TestSyncTagsClickUpAssignees(t *testing.T) {
+	e := newSyncEnv(t)
+	e.cfg.ClickUpUsers = map[string]string{"kim@x.io": "777"}
+	task := e.cu.tasks["IT-1"]
+	task.Assignees = []clickup.Assignee{{Name: "Kim", Email: "kim@x.io"}, {Name: "Lee", Email: "lee@x.io"}}
+	e.cu.tasks["IT-1"] = task
+	e.gh.lose("dev", lostPR{1, "IT-1/a", "ann"}, lostPR{2, "IT-2/b", "ann"}, lostPR{3, "no-ticket", "ann"})
+	e.gh.branches["stage"] = mainSHA
+
+	r, err := e.run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, want := range []string{"777", "111", "111"} { // IT-1's assignee, then PR openers
+		if got := e.dc.posts[i].ids; !reflect.DeepEqual(got, []string{want}) {
+			t.Errorf("post %d mentions = %v, want [%s]", i, got, want)
+		}
+	}
+	if got := r.Groups[0].Assignees; !reflect.DeepEqual(got, []string{"Kim", "Lee"}) {
+		t.Errorf("assignees = %v", got)
+	}
+	if !reflect.DeepEqual(r.Groups[0].People, []string{"ann"}) {
+		t.Errorf("people = %v", r.Groups[0].People)
+	}
+	raw, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := string(raw); !strings.Contains(s, `"assignees":[]`) || strings.Contains(s, "null") || strings.Contains(s, "x.io") {
+		t.Errorf("JSON = %s", s)
+	}
+}

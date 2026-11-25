@@ -21,7 +21,7 @@ const (
 	maxStatusRunes    = 100
 	maxURLRunes       = 300
 	maxCommitMsgRunes = 80
-	maxNameRunes      = 100 // repo, base and each target name in the reset line
+	maxNameRunes      = 100 // repo, base and each target name in the reset line; an assignee
 	maxResetTargets   = 5
 	shortSHALength    = 7
 	ghostMention      = "@ghost"
@@ -29,13 +29,14 @@ const (
 )
 
 type renderInput struct {
-	Owner, Repo string
-	Base        string // "main"
-	Group       drift.Group
-	Task        *clickup.Task     // nil when there is no ticket or ClickUp has none
-	TaskMissing bool              // a ticket ID that ClickUp does not know
-	Users       map[string]string // lower-cased GitHub login -> Discord user ID
-	WillReset   bool              // false in -no-reset mode
+	Owner, Repo  string
+	Base         string // "main"
+	Group        drift.Group
+	Task         *clickup.Task     // nil when there is no ticket or ClickUp has none
+	TaskMissing  bool              // a ticket ID that ClickUp does not know
+	Users        map[string]string // lower-cased GitHub login -> Discord user ID
+	ClickUpUsers map[string]string // lower-cased ClickUp email -> Discord user ID
+	WillReset    bool              // false in -no-reset mode
 }
 
 func renderGroup(in renderInput) (content string, mentionIDs []string) {
@@ -172,7 +173,43 @@ func itemLine(in renderInput, it drift.Item) string {
 // mention is one entry of the last line; id is set only for <@id> mentions.
 type mention struct{ text, id string }
 
+// mentionParts tags the ticket's ClickUp assignees. The authors are tagged when
+// none of them can be, so that somebody is always told.
 func mentionParts(in renderInput) []mention {
+	out, tagged := assigneeMentions(in)
+	if !tagged {
+		out = append(out, authorMentions(in)...)
+	}
+	if len(out) == 0 {
+		out = []mention{{text: ghostMention}}
+	}
+	return out
+}
+
+func assigneeMentions(in renderInput) (out []mention, tagged bool) {
+	if in.Task == nil {
+		return nil, false
+	}
+	for _, a := range in.Task.Assignees {
+		id, ok := in.ClickUpUsers[strings.ToLower(strings.TrimSpace(a.Email))]
+		name := strings.TrimSpace(oneLine(a.Name))
+		var m mention
+		switch {
+		case ok:
+			m, tagged = mention{"<@" + id + ">", id}, true
+		case name != "":
+			m = mention{text: cutRunes(name, maxNameRunes, "…")}
+		default:
+			continue // only an email is left, which is not for the channel
+		}
+		if !slices.Contains(out, m) {
+			out = append(out, m)
+		}
+	}
+	return out, tagged
+}
+
+func authorMentions(in renderInput) []mention {
 	var out []mention
 	var seen []string
 	for _, login := range in.Group.Logins {
@@ -189,9 +226,6 @@ func mentionParts(in renderInput) []mention {
 	}
 	for _, n := range in.Group.Names {
 		out = append(out, mention{text: oneLine(n)})
-	}
-	if len(out) == 0 {
-		out = []mention{{text: ghostMention}}
 	}
 	return out
 }

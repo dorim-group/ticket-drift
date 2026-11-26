@@ -265,13 +265,13 @@ func TestSyncHappyPath(t *testing.T) {
 		t.Fatalf("posts = %d, want 2: %q", len(e.dc.posts), e.dc.posts)
 	}
 	first := e.dc.posts[0]
-	if !strings.HasPrefix(first.content, "**IT-1** · Task one\n") {
+	if !strings.HasPrefix(first.content, "### 🎫 IT-1 · Task one\n") {
 		t.Errorf("first post = %q", first.content)
 	}
 	if !reflect.DeepEqual(first.ids, []string{"111"}) {
 		t.Errorf("first post mentions = %v, want [111]", first.ids)
 	}
-	wantSummary := "`r`: **dev** выровнен до main (`aaaaaaa`). Тикетов для повторного деплоя: 1."
+	wantSummary := "✅ `r`: **dev** выровнен до **main** (`aaaaaaa`). Тикетов для повторного деплоя: 1."
 	if got := e.dc.posts[1].content; got != wantSummary {
 		t.Errorf("summary = %q, want %q", got, wantSummary)
 	}
@@ -288,7 +288,7 @@ func TestSyncHappyPath(t *testing.T) {
 	if e.cu.checks != 1 {
 		t.Errorf("ClickUp checks = %d, want 1", e.cu.checks)
 	}
-	if !slices.Equal(*e.events, []string{"post **IT-1** · Task one", "update dev", "post " + wantSummary}) {
+	if !slices.Equal(*e.events, []string{"post ### 🎫 IT-1 · Task one", "update dev", "post " + wantSummary}) {
 		t.Errorf("events = %q", *e.events)
 	}
 
@@ -361,7 +361,7 @@ func TestSyncDryRunChangesNothing(t *testing.T) {
 		t.Errorf("ClickUp calls = %d, want 1", e.cu.calls)
 	}
 	out := e.out.String()
-	for _, want := range []string{"**IT-1** · Task one", "`r`: **dev** выровнен до main. Тикет нужно задеплоить заново.",
+	for _, want := range []string{"### 🎫 IT-1 · Task one", "🔄 `r`: **dev** выровнен до **main**\n🚀 Тикет нужно задеплоить заново",
 		"would reset dev dev-mer -> aaaaaaa"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
@@ -520,7 +520,7 @@ func TestSyncTargetMovedWithNewWork(t *testing.T) {
 	if len(e.dc.posts) != 2 || e.dc.posts[1].content != want {
 		t.Errorf("posts = %q, want the group then %q", e.dc.posts, want)
 	}
-	if postsContaining(e.dc, "ветка **dev** НЕ выровнена до main") != 1 {
+	if postsContaining(e.dc, "ветка **dev** НЕ выровнена до **main**") != 1 {
 		t.Errorf("no correction for dev in %q", e.dc.posts)
 	}
 }

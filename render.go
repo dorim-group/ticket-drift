@@ -25,7 +25,7 @@ const (
 	maxResetTargets   = 5
 	shortSHALength    = 7
 	ghostMention      = "@ghost"
-	droppedItemsFmt   = "…и ещё %d"
+	droppedItemsFmt   = "• …и ещё %d"
 )
 
 type renderInput struct {
@@ -43,10 +43,19 @@ func renderGroup(in renderInput) (content string, mentionIDs []string) {
 	in.Group.Key = cutRunes(oneLine(in.Group.Key), maxKeyRunes, "…")
 	head := headerLines(in)
 	var items []string
+	var prs, commits int
 	for _, it := range in.Group.Items {
 		if it.PR != nil || it.Commit != nil { // an empty item has nothing to show
 			items = append(items, itemLine(in, it))
 		}
+		if it.PR != nil {
+			prs++
+		} else if it.Commit != nil {
+			commits++
+		}
+	}
+	if len(items) > 0 {
+		head = append(head, itemsHeader(prs, commits))
 	}
 	mentions := mentionParts(in)
 
@@ -87,28 +96,37 @@ func headerLines(in renderInput) []string {
 	case drift.KindTicket:
 		switch {
 		case in.Task != nil:
-			status := "статус в ClickUp: " + cutRunes(in.Task.Status, maxStatusRunes, "…")
-			// A cut link is useless, so an overlong one is left out.
-			if utf8.RuneCountInString(in.Task.URL) <= maxURLRunes {
-				status = in.Task.URL + " · " + status
+			out = append(out, fmt.Sprintf("### 🎫 %s · %s", g.Key, cutRunes(oneLine(in.Task.Name), maxTitleRunes, "…")))
+			status := ""
+			if st := cutRunes(oneLine(in.Task.Status), maxStatusRunes, "…"); st != "" {
+				status = "статус: **" + st + "**"
 			}
-			out = append(out,
-				fmt.Sprintf("**%s** · %s", g.Key, cutRunes(in.Task.Name, maxTitleRunes, "…")),
-				status)
+			// A cut link is useless, so an overlong one is left out.
+			switch {
+			case utf8.RuneCountInString(in.Task.URL) <= maxURLRunes && in.Task.URL != "":
+				line := "📋 [Открыть в ClickUp](" + in.Task.URL + ")"
+				if status != "" {
+					line += " · " + status
+				}
+				out = append(out, line)
+			case status != "":
+				out = append(out, "📋 "+strings.Replace(status, "статус:", "статус в ClickUp:", 1))
+			}
 		case in.TaskMissing:
-			out = append(out, fmt.Sprintf("**%s**", g.Key), g.Key+" не найден в ClickUp")
+			out = append(out, fmt.Sprintf("### ❓ %s не найден в ClickUp", g.Key))
 		default:
-			out = append(out, fmt.Sprintf("**%s**", g.Key))
+			out = append(out, "### 🎫 "+g.Key)
 		}
 	case drift.KindBranch:
-		out = append(out, fmt.Sprintf("**Ветка без тикета** · `%s`", g.Key))
+		out = append(out, fmt.Sprintf("### 🌿 Ветка без тикета · `%s`", g.Key))
 	case drift.KindCommits:
-		out = append(out, fmt.Sprintf("**Коммиты без PR** · %s", g.Key))
+		out = append(out, "### 📝 Коммиты без PR · "+g.Key)
 	}
-	return append(out, resetLine(in))
+	return append(out, resetLines(in)...)
 }
 
-func resetLine(in renderInput) string {
+// resetLines says what happened to the targets, then what it means.
+func resetLines(in renderInput) []string {
 	targets := in.Group.Targets()
 	many := len(targets) > 1
 	ticket := in.Group.Kind == drift.KindTicket
@@ -119,29 +137,36 @@ func resetLine(in renderInput) string {
 		}
 		return one
 	}
+	what := "Изменения"
+	if ticket {
+		what = "Тикет"
+	}
 	if in.WillReset {
-		what := "Изменения"
-		if ticket {
-			what = "Тикет"
+		return []string{
+			fmt.Sprintf("🔄 `%s`: %s %s до **%s**", repo, targetList(targets), pick("выровнен", "выровнены"), base),
+			"🚀 " + what + " нужно задеплоить заново",
 		}
-		return fmt.Sprintf("`%s`: %s %s до %s. %s нужно задеплоить заново.",
-			repo, targetList(targets), pick("выровнен", "выровнены"), base, what)
 	}
-	var fate string
+	fate := pick("пропадёт с этого стенда", "пропадёт с этих стендов")
+	if !ticket {
+		fate = pick("пропадут с этого стенда", "пропадут с этих стендов")
+	}
+	return []string{
+		fmt.Sprintf("⏳ `%s`: %s %s до **%s** при следующем сбросе",
+			repo, targetList(targets), pick("будет выровнен", "будут выровнены"), base),
+		"⚠️ " + what + " " + fate,
+	}
+}
+
+// itemsHeader names what the list below it holds.
+func itemsHeader(prs, commits int) string {
 	switch {
-	case ticket:
-		fate = "Тикет пропадёт с этого стенда."
-		if many {
-			fate = "Тикет пропадёт с этих стендов."
-		}
-	default:
-		fate = "Изменения пропадут с этого стенда."
-		if many {
-			fate = "Изменения пропадут с этих стендов."
-		}
+	case commits == 0:
+		return "🔀 Pull requests:"
+	case prs == 0:
+		return "🔀 Коммиты:"
 	}
-	return fmt.Sprintf("`%s`: %s %s до %s при следующем сбросе. %s",
-		repo, targetList(targets), pick("будет выровнен", "будут выровнены"), base, fate)
+	return "🔀 Изменения:"
 }
 
 // targetList bolds the first maxResetTargets target names, each capped, and
@@ -162,12 +187,12 @@ func targetList(targets []string) string {
 
 func itemLine(in renderInput, it drift.Item) string {
 	if it.PR != nil {
-		return fmt.Sprintf("%s — [#%d](%s) `%s`", it.Target, it.PR.Number, it.PR.URL, it.PR.HeadRef)
+		return fmt.Sprintf("• **%s** — [#%d](%s) `%s`", it.Target, it.PR.Number, it.PR.URL, it.PR.HeadRef)
 	}
 	c := it.Commit
 	msg, _, _ := strings.Cut(c.Message, "\n")
 	msg = strings.TrimSuffix(msg, "\r")
-	return fmt.Sprintf("%s — [`%s`](https://github.com/%s/%s/commit/%s) %s",
+	return fmt.Sprintf("• **%s** — [`%s`](https://github.com/%s/%s/commit/%s) %s",
 		it.Target, shortSHA(c.SHA), in.Owner, in.Repo, c.SHA, cutRunes(msg, maxCommitMsgRunes, ""))
 }
 
@@ -251,10 +276,14 @@ func mentionText(m []mention, ellipsis bool) string {
 	for _, x := range m {
 		parts = append(parts, x.text)
 	}
+	label := "👤 Ответственный: "
+	if len(m) > 1 || ellipsis {
+		label = "👤 Ответственные: "
+	}
 	if ellipsis {
 		parts = append(parts, "…")
 	}
-	return strings.Join(parts, " ")
+	return label + strings.Join(parts, " ")
 }
 
 func idsOf(m []mention) []string {
@@ -268,7 +297,7 @@ func idsOf(m []mention) []string {
 }
 
 func renderCorrection(repo, target, base, reason string) string {
-	return fmt.Sprintf("`%s`: ветка **%s** НЕ выровнена до %s — %s. Сообщения выше о сбросе **%s** неактуальны.",
+	return fmt.Sprintf("⚠️ `%s`: ветка **%s** НЕ выровнена до **%s** — %s. Сообщения выше о сбросе **%s** неактуальны.",
 		repo, target, base, reason, target)
 }
 
@@ -277,7 +306,7 @@ func renderSummary(repo string, resetTargets []string, base, baseSHA string, gro
 	if len(resetTargets) > 1 {
 		verb = "выровнены"
 	}
-	return fmt.Sprintf("`%s`: %s %s до %s (`%s`). Тикетов для повторного деплоя: %d.",
+	return fmt.Sprintf("✅ `%s`: %s %s до **%s** (`%s`). Тикетов для повторного деплоя: %d.",
 		repo, boldJoin(resetTargets), verb, base, shortSHA(baseSHA), groups)
 }
 

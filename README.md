@@ -81,15 +81,20 @@ would print:
 
 One message per ticket, in Russian, posted before anything is reset:
 
-    **IT-10249** · Responsible managers
-    https://app.clickup.com/t/… · статус в ClickUp: in stage
-    `service-contractors`: **dev** и **stage** выровнены до main. Тикет нужно задеплоить заново.
-    dev — #1098 `IT-10249/responsible-managers-dev`
-    stage — #1062 `IT-10249/responsible-managers`
-    <@111111111111111111>
+    ### 🎫 IT-10249 · Responsible managers
+    📋 Открыть в ClickUp · статус: **in stage**
+    🔄 `service-contractors`: **dev** и **stage** выровнены до **main**
+    🚀 Тикет нужно задеплоить заново
+    🔀 Pull requests:
+    • **dev** — #1098 `IT-10249/responsible-managers-dev`
+    • **stage** — #1062 `IT-10249/responsible-managers`
+    👤 Ответственный: <@111111111111111111>
 
-PR numbers link to the pull requests. A ticket ClickUp does not know is still
-reported, with «IT-12345 не найден в ClickUp» in place of the title and link.
+«Открыть в ClickUp» links to the task and PR numbers link to the pull requests.
+A branch without a ticket is headed 🌿, commits without a PR 📝, and after the
+resets a ✅ summary follows (⚠️ instead for a branch that could not be reset).
+A ticket ClickUp does not know is still reported, headed «❓ IT-12345 не найден
+в ClickUp», with no ClickUp line.
 Whenever at least one ticket has to be looked up, the run first verifies the
 ClickUp token and team (`CLICKUP_TEAM_ID`); if that check fails, the run
 stops with nothing posted and nothing reset. Once it has passed, any 4xx ClickUp gives for one ticket ID

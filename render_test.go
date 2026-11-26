@@ -26,13 +26,19 @@ func baseInput(g drift.Group) renderInput {
 
 func lines(s string) []string { return strings.Split(s, "\n") }
 
+// who is the mentions line for one entry; whoMany for several.
+func who(s string) string     { return "👤 Ответственный: " + s }
+func whoMany(s string) string { return "👤 Ответственные: " + s }
+
 func TestRenderTicketTwoTargets(t *testing.T) {
-	want := "**IT-10249** · Responsible managers\n" +
-		"https://app.clickup.com/t/86c0 · статус в ClickUp: in stage\n" +
-		"`service-contractors`: **dev** и **stage** выровнены до main. Тикет нужно задеплоить заново.\n" +
-		"dev — [#1098](https://github.com/dorim-group/service-contractors/pull/1098) `IT-10249/responsible-managers-dev`\n" +
-		"stage — [#1062](https://github.com/dorim-group/service-contractors/pull/1062) `IT-10249/responsible-managers`\n" +
-		"<@111>"
+	want := "### 🎫 IT-10249 · Responsible managers\n" +
+		"📋 [Открыть в ClickUp](https://app.clickup.com/t/86c0) · статус: **in stage**\n" +
+		"🔄 `service-contractors`: **dev** и **stage** выровнены до **main**\n" +
+		"🚀 Тикет нужно задеплоить заново\n" +
+		"🔀 Pull requests:\n" +
+		"• **dev** — [#1098](https://github.com/dorim-group/service-contractors/pull/1098) `IT-10249/responsible-managers-dev`\n" +
+		"• **stage** — [#1062](https://github.com/dorim-group/service-contractors/pull/1062) `IT-10249/responsible-managers`\n" +
+		"👤 Ответственный: <@111>"
 	in := renderInput{
 		Owner: "dorim-group", Repo: "service-contractors", Base: "main",
 		Group: drift.Group{
@@ -64,8 +70,11 @@ func TestRenderTicketOneTarget(t *testing.T) {
 	in := baseInput(ticketGroup("bob"))
 	in.Task = &clickup.Task{Name: "N", URL: "u", Status: "s"}
 	got, _ := renderGroup(in)
-	if l := lines(got)[2]; l != "`r`: **dev** выровнен до main. Тикет нужно задеплоить заново." {
+	if l := lines(got)[2]; l != "🔄 `r`: **dev** выровнен до **main**" {
 		t.Errorf("line 3 = %q", l)
+	}
+	if l := lines(got)[3]; l != "🚀 Тикет нужно задеплоить заново" {
+		t.Errorf("line 4 = %q", l)
 	}
 }
 
@@ -73,7 +82,7 @@ func TestRenderTicketMissingInClickUp(t *testing.T) {
 	in := baseInput(ticketGroup("bob"))
 	in.TaskMissing = true
 	l := lines(func() string { s, _ := renderGroup(in); return s }())
-	if l[0] != "**IT-5**" || l[1] != "IT-5 не найден в ClickUp" {
+	if l[0] != "### ❓ IT-5 не найден в ClickUp" || !strings.HasPrefix(l[1], "🔄 ") {
 		t.Errorf("lines = %q", l[:2])
 	}
 }
@@ -82,10 +91,12 @@ func TestRenderBranchGroup(t *testing.T) {
 	g := drift.Group{Kind: drift.KindBranch, Key: "esf-hotfix", Logins: []string{"bob"},
 		Items: []drift.Item{pr("dev", 7, "esf-hotfix")}}
 	got, _ := renderGroup(baseInput(g))
-	want := "**Ветка без тикета** · `esf-hotfix`\n" +
-		"`r`: **dev** выровнен до main. Изменения нужно задеплоить заново.\n" +
-		"dev — [#7](https://github.com/o/r/pull/7) `esf-hotfix`\n" +
-		"@bob"
+	want := "### 🌿 Ветка без тикета · `esf-hotfix`\n" +
+		"🔄 `r`: **dev** выровнен до **main**\n" +
+		"🚀 Изменения нужно задеплоить заново\n" +
+		"🔀 Pull requests:\n" +
+		"• **dev** — [#7](https://github.com/o/r/pull/7) `esf-hotfix`\n" +
+		"👤 Ответственный: @bob"
 	if got != want {
 		t.Errorf("got %q\nwant %q", got, want)
 	}
@@ -95,10 +106,12 @@ func TestRenderCommitsGroup(t *testing.T) {
 	g := drift.Group{Kind: drift.KindCommits, Key: "ann", Logins: []string{"ann"},
 		Items: []drift.Item{{Target: "dev", Commit: &drift.Commit{SHA: "abc1234def5678", Message: "fix typo\n\nlong body"}}}}
 	got, _ := renderGroup(baseInput(g))
-	want := "**Коммиты без PR** · ann\n" +
-		"`r`: **dev** выровнен до main. Изменения нужно задеплоить заново.\n" +
-		"dev — [`abc1234`](https://github.com/o/r/commit/abc1234def5678) fix typo\n" +
-		"@ann"
+	want := "### 📝 Коммиты без PR · ann\n" +
+		"🔄 `r`: **dev** выровнен до **main**\n" +
+		"🚀 Изменения нужно задеплоить заново\n" +
+		"🔀 Коммиты:\n" +
+		"• **dev** — [`abc1234`](https://github.com/o/r/commit/abc1234def5678) fix typo\n" +
+		"👤 Ответственный: @ann"
 	if got != want {
 		t.Errorf("got %q\nwant %q", got, want)
 	}
@@ -108,7 +121,7 @@ func TestRenderCommitMessageCut(t *testing.T) {
 	g := drift.Group{Kind: drift.KindCommits, Key: "ann", Logins: []string{"ann"},
 		Items: []drift.Item{{Target: "dev", Commit: &drift.Commit{SHA: "abc1234def", Message: strings.Repeat("я", 100)}}}}
 	got, _ := renderGroup(baseInput(g))
-	if l := lines(got)[2]; !strings.HasSuffix(l, ") "+strings.Repeat("я", 80)) {
+	if l := lines(got)[4]; !strings.HasSuffix(l, ") "+strings.Repeat("я", 80)) {
 		t.Errorf("item line = %q", l)
 	}
 }
@@ -121,7 +134,7 @@ func lastLine(in renderInput) (string, []string) {
 
 func TestRenderUnmappedLoginIsPlainText(t *testing.T) {
 	l, ids := lastLine(baseInput(ticketGroup("carol")))
-	if l != "@carol" || len(ids) != 0 {
+	if l != who("@carol") || len(ids) != 0 {
 		t.Errorf("last = %q ids = %v", l, ids)
 	}
 }
@@ -130,7 +143,7 @@ func TestRenderTwoAuthors(t *testing.T) {
 	in := baseInput(ticketGroup("bob", "carol"))
 	in.Users = map[string]string{"bob": "111"}
 	l, ids := lastLine(in)
-	if l != "<@111> @carol" || !reflect.DeepEqual(ids, []string{"111"}) {
+	if l != whoMany("<@111> @carol") || !reflect.DeepEqual(ids, []string{"111"}) {
 		t.Errorf("last = %q ids = %v", l, ids)
 	}
 }
@@ -146,7 +159,7 @@ func TestRenderDuplicateIDsDistinct(t *testing.T) {
 
 func TestRenderDeletedAuthor(t *testing.T) {
 	l, _ := lastLine(baseInput(ticketGroup()))
-	if l != "@ghost" {
+	if l != who("@ghost") {
 		t.Errorf("last = %q", l)
 	}
 }
@@ -155,7 +168,7 @@ func TestRenderCommitAuthorWithoutLogin(t *testing.T) {
 	g := drift.Group{Kind: drift.KindCommits, Key: "Old Dev", Names: []string{"Old Dev"},
 		Items: []drift.Item{{Target: "dev", Commit: &drift.Commit{SHA: "abc1234def", Message: "m"}}}}
 	l, _ := lastLine(baseInput(g))
-	if l != "Old Dev" {
+	if l != who("Old Dev") {
 		t.Errorf("last = %q", l)
 	}
 }
@@ -164,21 +177,27 @@ func TestRenderNoReset(t *testing.T) {
 	in := baseInput(ticketGroup("bob"))
 	in.WillReset = false
 	got, _ := renderGroup(in)
-	if l := lines(got)[0]; l != "**IT-5**" {
-		t.Errorf("line 1 = %q", l)
-	}
-	if l := lines(got)[1]; l != "`r`: **dev** будет выровнен до main при следующем сбросе. Тикет пропадёт с этого стенда." {
-		t.Errorf("line 2 = %q", l)
+	l := lines(got)
+	if l[0] != "### 🎫 IT-5" || l[1] != "⏳ `r`: **dev** будет выровнен до **main** при следующем сбросе" ||
+		l[2] != "⚠️ Тикет пропадёт с этого стенда" {
+		t.Errorf("lines = %q", l[:3])
 	}
 	in.Group.Items = append(in.Group.Items, pr("qa", 2, "IT-5/y"))
 	got, _ = renderGroup(in)
-	if l := lines(got)[1]; l != "`r`: **dev** и **qa** будут выровнены до main при следующем сбросе. Тикет пропадёт с этих стендов." {
-		t.Errorf("several = %q", l)
+	l = lines(got)
+	if l[1] != "⏳ `r`: **dev** и **qa** будут выровнены до **main** при следующем сбросе" ||
+		l[2] != "⚠️ Тикет пропадёт с этих стендов" {
+		t.Errorf("several = %q", l[1:3])
 	}
 	in.Group = drift.Group{Kind: drift.KindBranch, Key: "b", Logins: []string{"bob"}, Items: []drift.Item{pr("dev", 3, "b")}}
 	got, _ = renderGroup(in)
-	if l := lines(got)[1]; l != "`r`: **dev** будет выровнен до main при следующем сбросе. Изменения пропадут с этого стенда." {
+	if l := lines(got)[2]; l != "⚠️ Изменения пропадут с этого стенда" {
 		t.Errorf("changes = %q", l)
+	}
+	in.Group.Items = append(in.Group.Items, pr("qa", 4, "b"))
+	got, _ = renderGroup(in)
+	if l := lines(got)[2]; l != "⚠️ Изменения пропадут с этих стендов" {
+		t.Errorf("changes, several = %q", l)
 	}
 }
 
@@ -195,7 +214,7 @@ func TestRenderLongTitleTruncated(t *testing.T) {
 	in := baseInput(ticketGroup("bob"))
 	in.Task = &clickup.Task{Name: strings.Repeat("ж", 500), URL: "u", Status: "s"}
 	got, _ := renderGroup(in)
-	want := "**IT-5** · " + strings.Repeat("ж", 200) + "…"
+	want := "### 🎫 IT-5 · " + strings.Repeat("ж", 200) + "…"
 	if l := lines(got)[0]; l != want {
 		t.Errorf("line 1 = %q", l)
 	}
@@ -213,34 +232,34 @@ func TestRenderManyItemsFitsLimit(t *testing.T) {
 		t.Errorf("%d runes", n)
 	}
 	l := lines(got)
-	if !strings.HasPrefix(l[len(l)-2], "…и ещё ") {
+	if !strings.HasPrefix(l[len(l)-2], "• …и ещё ") {
 		t.Errorf("penultimate = %q", l[len(l)-2])
 	}
-	if l[len(l)-1] != "@bob" {
+	if l[len(l)-1] != who("@bob") {
 		t.Errorf("last = %q", l[len(l)-1])
 	}
 	var shown int
 	for _, x := range l {
-		if strings.HasPrefix(x, "dev — ") {
+		if strings.HasPrefix(x, "• **dev** — ") {
 			shown++
 		}
 	}
-	if want := fmt.Sprintf("…и ещё %d", 60-shown); l[len(l)-2] != want {
+	if want := fmt.Sprintf("• …и ещё %d", 60-shown); l[len(l)-2] != want {
 		t.Errorf("marker = %q, want %q", l[len(l)-2], want)
 	}
 }
 
 func TestRenderCorrectionAndSummary(t *testing.T) {
 	if got, want := renderCorrection("service-contractors", "dev", "main", "конфликт защиты ветки"),
-		"`service-contractors`: ветка **dev** НЕ выровнена до main — конфликт защиты ветки. Сообщения выше о сбросе **dev** неактуальны."; got != want {
+		"⚠️ `service-contractors`: ветка **dev** НЕ выровнена до **main** — конфликт защиты ветки. Сообщения выше о сбросе **dev** неактуальны."; got != want {
 		t.Errorf("correction = %q", got)
 	}
 	if got, want := renderSummary("service-contractors", []string{"dev", "stage"}, "main", "abc1234", 6),
-		"`service-contractors`: **dev** и **stage** выровнены до main (`abc1234`). Тикетов для повторного деплоя: 6."; got != want {
+		"✅ `service-contractors`: **dev** и **stage** выровнены до **main** (`abc1234`). Тикетов для повторного деплоя: 6."; got != want {
 		t.Errorf("summary = %q", got)
 	}
 	if got, want := renderSummary("r", []string{"dev"}, "main", "abc1234", 1),
-		"`r`: **dev** выровнен до main (`abc1234`). Тикетов для повторного деплоя: 1."; got != want {
+		"✅ `r`: **dev** выровнен до **main** (`abc1234`). Тикетов для повторного деплоя: 1."; got != want {
 		t.Errorf("summary one = %q", got)
 	}
 }
@@ -259,7 +278,7 @@ func TestRenderManyMentionsFitsLimit(t *testing.T) {
 	}
 	l := lines(got)
 	last := l[len(l)-1]
-	if !strings.HasPrefix(last, "<@") || !strings.HasSuffix(last, "…") {
+	if !strings.HasPrefix(last, whoMany("<@")) || !strings.HasSuffix(last, "…") {
 		t.Errorf("last = %q", last)
 	}
 	if len(ids) == 0 || len(ids) >= 400 {
@@ -279,7 +298,7 @@ func TestRenderLongStatusAndKeyCapped(t *testing.T) {
 	if n := utf8.RuneCountInString(got); n > maxMessageUnits {
 		t.Errorf("%d runes", n)
 	}
-	if want := "https://x/t/1 · статус в ClickUp: " + strings.Repeat("с", 100) + "…"; lines(got)[1] != want {
+	if want := "📋 [Открыть в ClickUp](https://x/t/1) · статус: **" + strings.Repeat("с", 100) + "…**"; lines(got)[1] != want {
 		t.Errorf("line 2 = %q", lines(got)[1])
 	}
 	g := drift.Group{Kind: drift.KindBranch, Key: strings.Repeat("k", 3000), Logins: []string{"bob"},
@@ -294,14 +313,14 @@ func TestRenderOverlongURLOmitted(t *testing.T) {
 	in := baseInput(ticketGroup("bob"))
 	in.Task = &clickup.Task{Name: "N", URL: "https://x/" + strings.Repeat("u", 390), Status: "in stage"}
 	got, _ := renderGroup(in)
-	if l := lines(got)[1]; l != "статус в ClickUp: in stage" {
+	if l := lines(got)[1]; l != "📋 статус в ClickUp: **in stage**" {
 		t.Errorf("line 2 = %q", l)
 	}
 }
 
 func TestRenderCaseOnlyDuplicateLoginShownOnce(t *testing.T) {
 	l, _ := lastLine(baseInput(ticketGroup("Carol", "carol")))
-	if l != "@Carol" {
+	if l != who("@Carol") {
 		t.Errorf("last = %q", l)
 	}
 }
@@ -321,8 +340,8 @@ func TestRenderResetLineCapped(t *testing.T) {
 	if n := discordUnits(got); n > maxMessageUnits {
 		t.Errorf("%d UTF-16 units, want at most %d", n, maxMessageUnits)
 	}
-	want := "`" + strings.Repeat("r", 100) + "…`: **t1**, **t2**, **t3**, **t4**, **t5**, … выровнены до " +
-		strings.Repeat("b", 100) + "…. Тикет нужно задеплоить заново."
+	want := "🔄 `" + strings.Repeat("r", 100) + "…`: **t1**, **t2**, **t3**, **t4**, **t5**, … выровнены до **" +
+		strings.Repeat("b", 100) + "…**"
 	if l := lines(got)[1]; l != want {
 		t.Errorf("reset line = %q\nwant %q", l, want)
 	}
@@ -332,7 +351,7 @@ func TestRenderResetLineCapsTargetNames(t *testing.T) {
 	g := ticketGroup("bob")
 	g.Items = []drift.Item{pr(strings.Repeat("d", 3000), 1, "IT-5/x")}
 	got, _ := renderGroup(baseInput(g))
-	if want := "`r`: **" + strings.Repeat("d", 100) + "…** выровнен до main. Тикет нужно задеплоить заново."; lines(got)[1] != want {
+	if want := "🔄 `r`: **" + strings.Repeat("d", 100) + "…** выровнен до **main**"; lines(got)[1] != want {
 		t.Errorf("reset line = %q", lines(got)[1])
 	}
 }
@@ -358,10 +377,12 @@ func TestRenderSkipsEmptyItem(t *testing.T) {
 	g := ticketGroup("bob")
 	g.Items = []drift.Item{{Target: "dev"}, pr("dev", 1, "IT-5/x")}
 	got, _ := renderGroup(baseInput(g))
-	want := "**IT-5**\n" +
-		"`r`: **dev** выровнен до main. Тикет нужно задеплоить заново.\n" +
-		"dev — [#1](https://github.com/o/r/pull/1) `IT-5/x`\n" +
-		"@bob"
+	want := "### 🎫 IT-5\n" +
+		"🔄 `r`: **dev** выровнен до **main**\n" +
+		"🚀 Тикет нужно задеплоить заново\n" +
+		"🔀 Pull requests:\n" +
+		"• **dev** — [#1](https://github.com/o/r/pull/1) `IT-5/x`\n" +
+		"👤 Ответственный: @bob"
 	if got != want {
 		t.Errorf("got %q\nwant %q", got, want)
 	}
@@ -372,7 +393,7 @@ func TestRenderNameWithLineBreaks(t *testing.T) {
 		Items: []drift.Item{{Target: "dev", Commit: &drift.Commit{SHA: "abc1234def", Message: "m"}}}}
 	got, _ := renderGroup(baseInput(g))
 	l := lines(got)
-	if len(l) != 4 || l[0] != "**Коммиты без PR** · Old Dev" || l[3] != "Old Dev New Dev" {
+	if len(l) != 6 || l[0] != "### 📝 Коммиты без PR · Old Dev" || l[5] != whoMany("Old Dev New Dev") {
 		t.Errorf("lines = %q", l)
 	}
 	if strings.Contains(got, "\r") {
@@ -393,7 +414,7 @@ func TestRenderAstralTitleFitsLimit(t *testing.T) {
 	if n := discordUnits(got); n > maxMessageUnits {
 		t.Errorf("%d UTF-16 units, want at most %d", n, maxMessageUnits)
 	}
-	if want := "**IT-5** · " + strings.Repeat("😀", 200); lines(got)[0] != want {
+	if want := "### 🎫 IT-5 · " + strings.Repeat("😀", 200); lines(got)[0] != want {
 		t.Errorf("title line cut: %q", lines(got)[0])
 	}
 }
@@ -417,18 +438,18 @@ func TestRenderAssignees(t *testing.T) {
 		want      string
 		ids       []string
 	}{
-		"all mapped":                 {[]clickup.Assignee{ann, bob}, []string{"opener"}, "<@111> <@222>", []string{"111", "222"}},
-		"one mapped":                 {[]clickup.Assignee{ann, ivan}, []string{"opener"}, "<@111> Ivan Petrov", []string{"111"}},
-		"none mapped":                {[]clickup.Assignee{ivan}, []string{"opener"}, "Ivan Petrov <@999>", []string{"999"}},
-		"none mapped, opener absent": {[]clickup.Assignee{ivan}, nil, "Ivan Petrov", nil},
-		"no assignee":                {nil, []string{"opener"}, "<@999>", []string{"999"}},
-		"no assignee, no opener":     {nil, nil, "@ghost", nil},
-		"nameless and unmapped":      {[]clickup.Assignee{{Email: "new@x.io"}}, []string{"opener"}, "<@999>", []string{"999"}},
-		"no email":                   {[]clickup.Assignee{{Name: "Ann Lee"}}, []string{"opener"}, "Ann Lee <@999>", []string{"999"}},
-		"email padded":               {[]clickup.Assignee{{Name: "Ann Lee", Email: " ann@x.io "}}, nil, "<@111>", []string{"111"}},
-		"long name":                  {[]clickup.Assignee{{Name: strings.Repeat("я", 500)}}, nil, strings.Repeat("я", 100) + "…", nil},
-		"one opener, two logins":     {nil, []string{"opener", "opener2"}, "<@999>", []string{"999"}},
-		"same person twice":          {[]clickup.Assignee{ann, ann}, nil, "<@111>", []string{"111"}},
+		"all mapped":                 {[]clickup.Assignee{ann, bob}, []string{"opener"}, whoMany("<@111> <@222>"), []string{"111", "222"}},
+		"one mapped":                 {[]clickup.Assignee{ann, ivan}, []string{"opener"}, whoMany("<@111> Ivan Petrov"), []string{"111"}},
+		"none mapped":                {[]clickup.Assignee{ivan}, []string{"opener"}, whoMany("Ivan Petrov <@999>"), []string{"999"}},
+		"none mapped, opener absent": {[]clickup.Assignee{ivan}, nil, who("Ivan Petrov"), nil},
+		"no assignee":                {nil, []string{"opener"}, who("<@999>"), []string{"999"}},
+		"no assignee, no opener":     {nil, nil, who("@ghost"), nil},
+		"nameless and unmapped":      {[]clickup.Assignee{{Email: "new@x.io"}}, []string{"opener"}, who("<@999>"), []string{"999"}},
+		"no email":                   {[]clickup.Assignee{{Name: "Ann Lee"}}, []string{"opener"}, whoMany("Ann Lee <@999>"), []string{"999"}},
+		"email padded":               {[]clickup.Assignee{{Name: "Ann Lee", Email: " ann@x.io "}}, nil, who("<@111>"), []string{"111"}},
+		"long name":                  {[]clickup.Assignee{{Name: strings.Repeat("я", 500)}}, nil, who(strings.Repeat("я", 100) + "…"), nil},
+		"one opener, two logins":     {nil, []string{"opener", "opener2"}, who("<@999>"), []string{"999"}},
+		"same person twice":          {[]clickup.Assignee{ann, ann}, nil, who("<@111>"), []string{"111"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			in := baseInput(ticketGroup(tc.logins...))
@@ -460,5 +481,23 @@ func TestRenderManyLongAssigneeNamesFitLimit(t *testing.T) {
 	}
 	if n := discordUnits(got); n > maxMessageUnits {
 		t.Errorf("length = %d units, want at most %d", n, maxMessageUnits)
+	}
+}
+
+func TestRenderItemsHeaderMixed(t *testing.T) {
+	g := ticketGroup("bob")
+	g.Items = append(g.Items, drift.Item{Target: "stage", Commit: &drift.Commit{SHA: "abc1234def", Message: "IT-5 fix"}})
+	got, _ := renderGroup(baseInput(g))
+	if l := lines(got)[3]; l != "🔀 Изменения:" {
+		t.Errorf("items header = %q", l)
+	}
+}
+
+func TestRenderEmptyStatusAndMultilineTitle(t *testing.T) {
+	in := baseInput(ticketGroup("bob"))
+	in.Task = &clickup.Task{Name: "Fix\nlogin", URL: "https://x/t/1"}
+	l := lines(func() string { s, _ := renderGroup(in); return s }())
+	if l[0] != "### 🎫 IT-5 · Fix login" || l[1] != "📋 [Открыть в ClickUp](https://x/t/1)" {
+		t.Errorf("lines = %q", l[:2])
 	}
 }

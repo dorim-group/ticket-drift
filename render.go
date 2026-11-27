@@ -309,7 +309,7 @@ func renderSummary(repo string, resetTargets []string, base, baseSHA string, gro
 	if len(resetTargets) > 1 {
 		verb = "выровнены"
 	}
-	return endMessage(fmt.Sprintf("✅ `%s`: %s %s до **%s** (`%s`). Тикетов для повторного деплоя: %d.",
+	return endMessage(fmt.Sprintf("✅ `%s`: %s %s до **%s** (`%s`). Тикетов для повторного деплоя: **%d**.",
 		repo, boldJoin(resetTargets), verb, base, shortSHA(baseSHA), groups))
 }
 

@@ -271,7 +271,7 @@ func TestSyncHappyPath(t *testing.T) {
 	if !reflect.DeepEqual(first.ids, []string{"111"}) {
 		t.Errorf("first post mentions = %v, want [111]", first.ids)
 	}
-	summaryLine := "✅ `r`: **dev** выровнен до **main** (`aaaaaaa`). Тикетов для повторного деплоя: 1."
+	summaryLine := "✅ `r`: **dev** выровнен до **main** (`aaaaaaa`). Тикетов для повторного деплоя: **1**."
 	wantSummary := summaryLine + "\n\n" + messageSeparator
 	if got := e.dc.posts[1].content; got != wantSummary {
 		t.Errorf("summary = %q, want %q", got, wantSummary)

@@ -268,11 +268,11 @@ func TestRenderCorrectionAndSummary(t *testing.T) {
 		t.Errorf("correction = %q", got)
 	}
 	if got, want := renderSummary("service-contractors", []string{"dev", "stage"}, "main", "abc1234", 6),
-		"✅ `service-contractors`: **dev** и **stage** выровнены до **main** (`abc1234`). Тикетов для повторного деплоя: 6.\n\n━━━━━━━━━━━━━━━━━━━━"; got != want {
+		"✅ `service-contractors`: **dev** и **stage** выровнены до **main** (`abc1234`). Тикетов для повторного деплоя: **6**.\n\n━━━━━━━━━━━━━━━━━━━━"; got != want {
 		t.Errorf("summary = %q", got)
 	}
 	if got, want := renderSummary("r", []string{"dev"}, "main", "abc1234", 1),
-		"✅ `r`: **dev** выровнен до **main** (`abc1234`). Тикетов для повторного деплоя: 1.\n\n━━━━━━━━━━━━━━━━━━━━"; got != want {
+		"✅ `r`: **dev** выровнен до **main** (`abc1234`). Тикетов для повторного деплоя: **1**.\n\n━━━━━━━━━━━━━━━━━━━━"; got != want {
 		t.Errorf("summary one = %q", got)
 	}
 }

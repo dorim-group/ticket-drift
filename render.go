@@ -309,8 +309,9 @@ func renderSummary(repo string, resetTargets []string, base, baseSHA string, gro
 	if len(resetTargets) > 1 {
 		verb = "выровнены"
 	}
-	return endMessage(fmt.Sprintf("✅ `%s`: %s %s до **%s** (`%s`). Тикетов для повторного деплоя: **%d**.",
-		repo, boldJoin(resetTargets), verb, base, shortSHA(baseSHA), groups))
+	// The summary closes the run, so the separator sits right under it.
+	return fmt.Sprintf("✅ `%s`: %s %s до **%s** (`%s`). Тикетов для повторного деплоя: **%d**.\n%s",
+		repo, boldJoin(resetTargets), verb, base, shortSHA(baseSHA), groups, messageSeparator)
 }
 
 func endMessage(s string) string { return s + "\n\n" + messageSeparator }

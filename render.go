@@ -26,6 +26,9 @@ const (
 	shortSHALength    = 7
 	ghostMention      = "@ghost"
 	droppedItemsFmt   = "• …и ещё %d"
+	// messageSeparator ends every message, so that consecutive ones are told
+	// apart; Discord drops blank lines at the edges of a message.
+	messageSeparator = "━━━━━━━━━━━━━━━━━━━━"
 )
 
 type renderInput struct {
@@ -54,14 +57,15 @@ func renderGroup(in renderInput) (content string, mentionIDs []string) {
 			commits++
 		}
 	}
-	if len(items) > 0 {
-		head = append(head, itemsHeader(prs, commits))
-	}
 	mentions := mentionParts(in)
 
+	// Blank lines part the header, the items and the mentions.
 	build := func(shown []string, m []mention, ellipsis bool) string {
-		parts := append(slices.Clone(head), shown...)
-		return strings.Join(append(parts, mentionText(m, ellipsis)), "\n")
+		parts := slices.Clone(head)
+		if len(shown) > 0 {
+			parts = append(append(parts, "", itemsHeader(prs, commits)), shown...)
+		}
+		return endMessage(strings.Join(append(parts, "", mentionText(m, ellipsis)), "\n"))
 	}
 	fits := func(s string) bool { return discordLen(s) <= maxMessageUnits }
 
@@ -137,19 +141,18 @@ func resetLines(in renderInput) []string {
 		}
 		return one
 	}
-	what := "Изменения"
-	if ticket {
-		what = "Тикет"
-	}
 	if in.WillReset {
 		return []string{
 			fmt.Sprintf("🔄 `%s`: %s %s до **%s**", repo, targetList(targets), pick("выровнен", "выровнены"), base),
-			"🚀 " + what + " нужно задеплоить заново",
 		}
 	}
 	fate := pick("пропадёт с этого стенда", "пропадёт с этих стендов")
 	if !ticket {
 		fate = pick("пропадут с этого стенда", "пропадут с этих стендов")
+	}
+	what := "Изменения"
+	if ticket {
+		what = "Тикет"
 	}
 	return []string{
 		fmt.Sprintf("⏳ `%s`: %s %s до **%s** при следующем сбросе",
@@ -297,8 +300,8 @@ func idsOf(m []mention) []string {
 }
 
 func renderCorrection(repo, target, base, reason string) string {
-	return fmt.Sprintf("⚠️ `%s`: ветка **%s** НЕ выровнена до **%s** — %s. Сообщения выше о сбросе **%s** неактуальны.",
-		repo, target, base, reason, target)
+	return endMessage(fmt.Sprintf("⚠️ `%s`: ветка **%s** НЕ выровнена до **%s** — %s. Сообщения выше о сбросе **%s** неактуальны.",
+		repo, target, base, reason, target))
 }
 
 func renderSummary(repo string, resetTargets []string, base, baseSHA string, groups int) string {
@@ -306,9 +309,11 @@ func renderSummary(repo string, resetTargets []string, base, baseSHA string, gro
 	if len(resetTargets) > 1 {
 		verb = "выровнены"
 	}
-	return fmt.Sprintf("✅ `%s`: %s %s до **%s** (`%s`). Тикетов для повторного деплоя: %d.",
-		repo, boldJoin(resetTargets), verb, base, shortSHA(baseSHA), groups)
+	return endMessage(fmt.Sprintf("✅ `%s`: %s %s до **%s** (`%s`). Тикетов для повторного деплоя: %d.",
+		repo, boldJoin(resetTargets), verb, base, shortSHA(baseSHA), groups))
 }
+
+func endMessage(s string) string { return s + "\n\n" + messageSeparator }
 
 // boldJoin renders "**a**", "**a** и **b**" or "**a**, **b** и **c**".
 func boldJoin(targets []string) string {

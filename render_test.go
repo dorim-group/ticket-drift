@@ -33,12 +33,12 @@ func whoMany(s string) string { return "👤 Ответственные: " + s }
 func TestRenderTicketTwoTargets(t *testing.T) {
 	want := "### 🎫 IT-10249 · Responsible managers\n" +
 		"📋 [Открыть в ClickUp](https://app.clickup.com/t/86c0) · статус: **in stage**\n" +
-		"🔄 `service-contractors`: **dev** и **stage** выровнены до **main**\n" +
-		"🚀 Тикет нужно задеплоить заново\n" +
+		"🔄 `service-contractors`: **dev** и **stage** выровнены до **main**\n\n" +
 		"🔀 Pull requests:\n" +
 		"• **dev** — [#1098](https://github.com/dorim-group/service-contractors/pull/1098) `IT-10249/responsible-managers-dev`\n" +
-		"• **stage** — [#1062](https://github.com/dorim-group/service-contractors/pull/1062) `IT-10249/responsible-managers`\n" +
-		"👤 Ответственный: <@111>"
+		"• **stage** — [#1062](https://github.com/dorim-group/service-contractors/pull/1062) `IT-10249/responsible-managers`\n\n" +
+		"👤 Ответственный: <@111>\n\n" +
+		"━━━━━━━━━━━━━━━━━━━━"
 	in := renderInput{
 		Owner: "dorim-group", Repo: "service-contractors", Base: "main",
 		Group: drift.Group{
@@ -73,8 +73,8 @@ func TestRenderTicketOneTarget(t *testing.T) {
 	if l := lines(got)[2]; l != "🔄 `r`: **dev** выровнен до **main**" {
 		t.Errorf("line 3 = %q", l)
 	}
-	if l := lines(got)[3]; l != "🚀 Тикет нужно задеплоить заново" {
-		t.Errorf("line 4 = %q", l)
+	if l := lines(got)[3]; l != "" {
+		t.Errorf("line 4 = %q, want a blank line", l)
 	}
 }
 
@@ -92,11 +92,11 @@ func TestRenderBranchGroup(t *testing.T) {
 		Items: []drift.Item{pr("dev", 7, "esf-hotfix")}}
 	got, _ := renderGroup(baseInput(g))
 	want := "### 🌿 Ветка без тикета · `esf-hotfix`\n" +
-		"🔄 `r`: **dev** выровнен до **main**\n" +
-		"🚀 Изменения нужно задеплоить заново\n" +
+		"🔄 `r`: **dev** выровнен до **main**\n\n" +
 		"🔀 Pull requests:\n" +
-		"• **dev** — [#7](https://github.com/o/r/pull/7) `esf-hotfix`\n" +
-		"👤 Ответственный: @bob"
+		"• **dev** — [#7](https://github.com/o/r/pull/7) `esf-hotfix`\n\n" +
+		"👤 Ответственный: @bob\n\n" +
+		"━━━━━━━━━━━━━━━━━━━━"
 	if got != want {
 		t.Errorf("got %q\nwant %q", got, want)
 	}
@@ -107,11 +107,11 @@ func TestRenderCommitsGroup(t *testing.T) {
 		Items: []drift.Item{{Target: "dev", Commit: &drift.Commit{SHA: "abc1234def5678", Message: "fix typo\n\nlong body"}}}}
 	got, _ := renderGroup(baseInput(g))
 	want := "### 📝 Коммиты без PR · ann\n" +
-		"🔄 `r`: **dev** выровнен до **main**\n" +
-		"🚀 Изменения нужно задеплоить заново\n" +
+		"🔄 `r`: **dev** выровнен до **main**\n\n" +
 		"🔀 Коммиты:\n" +
-		"• **dev** — [`abc1234`](https://github.com/o/r/commit/abc1234def5678) fix typo\n" +
-		"👤 Ответственный: @ann"
+		"• **dev** — [`abc1234`](https://github.com/o/r/commit/abc1234def5678) fix typo\n\n" +
+		"👤 Ответственный: @ann\n\n" +
+		"━━━━━━━━━━━━━━━━━━━━"
 	if got != want {
 		t.Errorf("got %q\nwant %q", got, want)
 	}
@@ -126,10 +126,22 @@ func TestRenderCommitMessageCut(t *testing.T) {
 	}
 }
 
+// mentionsLine returns the mentions line of content, which every message
+// follows with a blank line and the separator.
+func mentionsLine(t *testing.T, content string) string {
+	t.Helper()
+	body, ok := strings.CutSuffix(content, "\n\n"+messageSeparator)
+	if !ok {
+		t.Fatalf("message does not end with the separator: %q", content)
+	}
+	l := lines(body)
+	return l[len(l)-1]
+}
+
 func lastLine(in renderInput) (string, []string) {
 	got, ids := renderGroup(in)
 	l := lines(got)
-	return l[len(l)-1], ids
+	return l[len(l)-3], ids
 }
 
 func TestRenderUnmappedLoginIsPlainText(t *testing.T) {
@@ -232,11 +244,12 @@ func TestRenderManyItemsFitsLimit(t *testing.T) {
 		t.Errorf("%d runes", n)
 	}
 	l := lines(got)
-	if !strings.HasPrefix(l[len(l)-2], "• …и ещё ") {
-		t.Errorf("penultimate = %q", l[len(l)-2])
+	marker := l[len(l)-5]
+	if !strings.HasPrefix(marker, "• …и ещё ") {
+		t.Errorf("marker line = %q", marker)
 	}
-	if l[len(l)-1] != who("@bob") {
-		t.Errorf("last = %q", l[len(l)-1])
+	if m := mentionsLine(t, got); m != who("@bob") {
+		t.Errorf("mentions = %q", m)
 	}
 	var shown int
 	for _, x := range l {
@@ -244,22 +257,22 @@ func TestRenderManyItemsFitsLimit(t *testing.T) {
 			shown++
 		}
 	}
-	if want := fmt.Sprintf("• …и ещё %d", 60-shown); l[len(l)-2] != want {
-		t.Errorf("marker = %q, want %q", l[len(l)-2], want)
+	if want := fmt.Sprintf("• …и ещё %d", 60-shown); marker != want {
+		t.Errorf("marker = %q, want %q", marker, want)
 	}
 }
 
 func TestRenderCorrectionAndSummary(t *testing.T) {
 	if got, want := renderCorrection("service-contractors", "dev", "main", "конфликт защиты ветки"),
-		"⚠️ `service-contractors`: ветка **dev** НЕ выровнена до **main** — конфликт защиты ветки. Сообщения выше о сбросе **dev** неактуальны."; got != want {
+		"⚠️ `service-contractors`: ветка **dev** НЕ выровнена до **main** — конфликт защиты ветки. Сообщения выше о сбросе **dev** неактуальны.\n\n━━━━━━━━━━━━━━━━━━━━"; got != want {
 		t.Errorf("correction = %q", got)
 	}
 	if got, want := renderSummary("service-contractors", []string{"dev", "stage"}, "main", "abc1234", 6),
-		"✅ `service-contractors`: **dev** и **stage** выровнены до **main** (`abc1234`). Тикетов для повторного деплоя: 6."; got != want {
+		"✅ `service-contractors`: **dev** и **stage** выровнены до **main** (`abc1234`). Тикетов для повторного деплоя: 6.\n\n━━━━━━━━━━━━━━━━━━━━"; got != want {
 		t.Errorf("summary = %q", got)
 	}
 	if got, want := renderSummary("r", []string{"dev"}, "main", "abc1234", 1),
-		"✅ `r`: **dev** выровнен до **main** (`abc1234`). Тикетов для повторного деплоя: 1."; got != want {
+		"✅ `r`: **dev** выровнен до **main** (`abc1234`). Тикетов для повторного деплоя: 1.\n\n━━━━━━━━━━━━━━━━━━━━"; got != want {
 		t.Errorf("summary one = %q", got)
 	}
 }
@@ -276,8 +289,7 @@ func TestRenderManyMentionsFitsLimit(t *testing.T) {
 	if n := utf8.RuneCountInString(got); n > maxMessageUnits {
 		t.Errorf("%d runes", n)
 	}
-	l := lines(got)
-	last := l[len(l)-1]
+	last := mentionsLine(t, got)
 	if !strings.HasPrefix(last, whoMany("<@")) || !strings.HasSuffix(last, "…") {
 		t.Errorf("last = %q", last)
 	}
@@ -378,11 +390,11 @@ func TestRenderSkipsEmptyItem(t *testing.T) {
 	g.Items = []drift.Item{{Target: "dev"}, pr("dev", 1, "IT-5/x")}
 	got, _ := renderGroup(baseInput(g))
 	want := "### 🎫 IT-5\n" +
-		"🔄 `r`: **dev** выровнен до **main**\n" +
-		"🚀 Тикет нужно задеплоить заново\n" +
+		"🔄 `r`: **dev** выровнен до **main**\n\n" +
 		"🔀 Pull requests:\n" +
-		"• **dev** — [#1](https://github.com/o/r/pull/1) `IT-5/x`\n" +
-		"👤 Ответственный: @bob"
+		"• **dev** — [#1](https://github.com/o/r/pull/1) `IT-5/x`\n\n" +
+		"👤 Ответственный: @bob\n\n" +
+		"━━━━━━━━━━━━━━━━━━━━"
 	if got != want {
 		t.Errorf("got %q\nwant %q", got, want)
 	}
@@ -393,7 +405,7 @@ func TestRenderNameWithLineBreaks(t *testing.T) {
 		Items: []drift.Item{{Target: "dev", Commit: &drift.Commit{SHA: "abc1234def", Message: "m"}}}}
 	got, _ := renderGroup(baseInput(g))
 	l := lines(got)
-	if len(l) != 6 || l[0] != "### 📝 Коммиты без PR · Old Dev" || l[5] != whoMany("Old Dev New Dev") {
+	if len(l) != 9 || l[0] != "### 📝 Коммиты без PR · Old Dev" || mentionsLine(t, got) != whoMany("Old Dev New Dev") {
 		t.Errorf("lines = %q", l)
 	}
 	if strings.Contains(got, "\r") {
@@ -457,9 +469,8 @@ func TestRenderAssignees(t *testing.T) {
 			in.Users = map[string]string{"opener": "999", "opener2": "999"}
 			in.ClickUpUsers = map[string]string{"ann@x.io": "111", "bob@x.io": "222"}
 			got, ids := renderGroup(in)
-			l := lines(got)
-			if l[len(l)-1] != tc.want || !reflect.DeepEqual(ids, tc.ids) {
-				t.Errorf("last = %q ids = %v, want %q %v", l[len(l)-1], ids, tc.want, tc.ids)
+			if m := mentionsLine(t, got); m != tc.want || !reflect.DeepEqual(ids, tc.ids) {
+				t.Errorf("mentions = %q ids = %v, want %q %v", m, ids, tc.want, tc.ids)
 			}
 			if strings.Contains(got, "x.io") {
 				t.Errorf("message shows an email: %q", got)
@@ -499,5 +510,22 @@ func TestRenderEmptyStatusAndMultilineTitle(t *testing.T) {
 	l := lines(func() string { s, _ := renderGroup(in); return s }())
 	if l[0] != "### 🎫 IT-5 · Fix login" || l[1] != "📋 [Открыть в ClickUp](https://x/t/1)" {
 		t.Errorf("lines = %q", l[:2])
+	}
+}
+
+// Every message ends with the separator, also when it had to be shortened.
+func TestRenderEndsWithSeparator(t *testing.T) {
+	in := baseInput(ticketGroup("bob"))
+	for i := 0; i < 400; i++ {
+		login := fmt.Sprintf("user%d", i)
+		in.Group.Logins = append(in.Group.Logins, login)
+		in.Users[login] = fmt.Sprintf("%018d", 100000000000000000+i)
+	}
+	for _, g := range []drift.Group{ticketGroup("bob"), in.Group, {Kind: drift.KindCommits, Key: "ann"}} {
+		in.Group = g
+		got, _ := renderGroup(in)
+		if !strings.HasSuffix(got, "\n\n"+messageSeparator) || discordUnits(got) > maxMessageUnits {
+			t.Errorf("%d units, ends %q", discordUnits(got), got[max(0, len(got)-80):])
+		}
 	}
 }

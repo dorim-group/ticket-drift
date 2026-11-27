@@ -28,7 +28,7 @@ const (
 	droppedItemsFmt   = "• …и ещё %d"
 	// messageSeparator ends every message, so that consecutive ones are told
 	// apart; Discord drops blank lines at the edges of a message.
-	messageSeparator = "━━━━━━━━━━━━━━━━━━━━"
+	messageSeparator = "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
 )
 
 type renderInput struct {

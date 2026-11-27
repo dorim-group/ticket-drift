@@ -38,7 +38,7 @@ func TestRenderTicketTwoTargets(t *testing.T) {
 		"• **dev** — [#1098](https://github.com/dorim-group/service-contractors/pull/1098) `IT-10249/responsible-managers-dev`\n" +
 		"• **stage** — [#1062](https://github.com/dorim-group/service-contractors/pull/1062) `IT-10249/responsible-managers`\n\n" +
 		"👤 Ответственный: <@111>\n\n" +
-		"━━━━━━━━━━━━━━━━━━━━"
+		"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
 	in := renderInput{
 		Owner: "dorim-group", Repo: "service-contractors", Base: "main",
 		Group: drift.Group{
@@ -96,7 +96,7 @@ func TestRenderBranchGroup(t *testing.T) {
 		"🔀 Pull requests:\n" +
 		"• **dev** — [#7](https://github.com/o/r/pull/7) `esf-hotfix`\n\n" +
 		"👤 Ответственный: @bob\n\n" +
-		"━━━━━━━━━━━━━━━━━━━━"
+		"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
 	if got != want {
 		t.Errorf("got %q\nwant %q", got, want)
 	}
@@ -111,7 +111,7 @@ func TestRenderCommitsGroup(t *testing.T) {
 		"🔀 Коммиты:\n" +
 		"• **dev** — [`abc1234`](https://github.com/o/r/commit/abc1234def5678) fix typo\n\n" +
 		"👤 Ответственный: @ann\n\n" +
-		"━━━━━━━━━━━━━━━━━━━━"
+		"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
 	if got != want {
 		t.Errorf("got %q\nwant %q", got, want)
 	}
@@ -264,15 +264,15 @@ func TestRenderManyItemsFitsLimit(t *testing.T) {
 
 func TestRenderCorrectionAndSummary(t *testing.T) {
 	if got, want := renderCorrection("service-contractors", "dev", "main", "конфликт защиты ветки"),
-		"⚠️ `service-contractors`: ветка **dev** НЕ выровнена до **main** — конфликт защиты ветки. Сообщения выше о сбросе **dev** неактуальны.\n\n━━━━━━━━━━━━━━━━━━━━"; got != want {
+		"⚠️ `service-contractors`: ветка **dev** НЕ выровнена до **main** — конфликт защиты ветки. Сообщения выше о сбросе **dev** неактуальны.\n\n▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"; got != want {
 		t.Errorf("correction = %q", got)
 	}
 	if got, want := renderSummary("service-contractors", []string{"dev", "stage"}, "main", "abc1234", 6),
-		"✅ `service-contractors`: **dev** и **stage** выровнены до **main** (`abc1234`). Тикетов для повторного деплоя: **6**.\n━━━━━━━━━━━━━━━━━━━━"; got != want {
+		"✅ `service-contractors`: **dev** и **stage** выровнены до **main** (`abc1234`). Тикетов для повторного деплоя: **6**.\n▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"; got != want {
 		t.Errorf("summary = %q", got)
 	}
 	if got, want := renderSummary("r", []string{"dev"}, "main", "abc1234", 1),
-		"✅ `r`: **dev** выровнен до **main** (`abc1234`). Тикетов для повторного деплоя: **1**.\n━━━━━━━━━━━━━━━━━━━━"; got != want {
+		"✅ `r`: **dev** выровнен до **main** (`abc1234`). Тикетов для повторного деплоя: **1**.\n▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"; got != want {
 		t.Errorf("summary one = %q", got)
 	}
 }
@@ -394,7 +394,7 @@ func TestRenderSkipsEmptyItem(t *testing.T) {
 		"🔀 Pull requests:\n" +
 		"• **dev** — [#1](https://github.com/o/r/pull/1) `IT-5/x`\n\n" +
 		"👤 Ответственный: @bob\n\n" +
-		"━━━━━━━━━━━━━━━━━━━━"
+		"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
 	if got != want {
 		t.Errorf("got %q\nwant %q", got, want)
 	}

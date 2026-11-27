@@ -371,3 +371,37 @@ func TestConfigUsersListErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestConfigUsersURL(t *testing.T) {
+	env := baseEnv()
+	env["TICKET_DRIFT_USERS_URL"] = " https://bucket.example/people.json?sig=1 "
+	env["TICKET_DRIFT_USERS"] = `{"bob":"111111111111111111"}`
+	cfg, err := parse(t, env, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The URL wins over the inline list; the list itself is downloaded later.
+	if cfg.UsersURL != "https://bucket.example/people.json?sig=1" || len(cfg.Users) != 0 || cfg.Users == nil || cfg.ClickUpUsers == nil {
+		t.Errorf("UsersURL = %q, users = %v, ClickUp users = %v", cfg.UsersURL, cfg.Users, cfg.ClickUpUsers)
+	}
+
+	// A -users file wins over the URL.
+	cfg, err = parse(t, env, map[string]string{"p.json": `{"file":"222222222222222222"}`}, "-users", "p.json")
+	if err != nil || cfg.UsersURL != "" || cfg.Users["file"] != "222222222222222222" {
+		t.Errorf("with -users: UsersURL = %q, users = %v, err = %v", cfg.UsersURL, cfg.Users, err)
+	}
+}
+
+func TestConfigUsersURLMustBeHTTPS(t *testing.T) {
+	for _, v := range []string{"http://bucket.example/p.json?sig=topsecret", "bucket.example/p.json", "https:///p.json", "::"} {
+		env := baseEnv()
+		env["TICKET_DRIFT_USERS_URL"] = v
+		_, err := parse(t, env, nil)
+		if err == nil || !strings.Contains(err.Error(), "TICKET_DRIFT_USERS_URL must be an https:// URL") {
+			t.Errorf("%q: err = %v", v, err)
+		}
+		if err != nil && strings.Contains(err.Error(), "topsecret") {
+			t.Errorf("%q: error shows the URL: %v", v, err)
+		}
+	}
+}

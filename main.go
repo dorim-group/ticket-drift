@@ -80,6 +80,13 @@ func cmdSync(args []string) {
 // syncCommand builds the clients, runs the sync and writes the report. The
 // returned error fails the run.
 func syncCommand(cfg config, out io.Writer) error {
+	// Before anything else: without the list nobody could be tagged.
+	if err := loadUsersURL(&cfg, newUsersClient(nil)); err != nil {
+		return withReport(cfg, newReport(cfg), err)
+	}
+	if cfg.UsersURL != "" {
+		fmt.Fprintf(out, "people list: downloaded from %s\n", redactURL(cfg.UsersURL))
+	}
 	var gh *github.Client
 	var err error
 	if cfg.GitHubToken != "" {

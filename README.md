@@ -46,7 +46,7 @@ stop `stage`, and the run then exits `1`.
 | `-base` | `main` | the branch the targets are reset to |
 | `-targets` | `dev,stage` | comma-separated branches to reset; a missing one is skipped |
 | `-ticket-pattern` | `IT-\d+` | Go regexp for ticket IDs in branch names, matched case-insensitively |
-| `-users` | — | path to a JSON file listing people and their Discord user IDs; overrides `TICKET_DRIFT_USERS` |
+| `-users` | — | path to a JSON file listing people and their Discord user IDs; overrides `TICKET_DRIFT_USERS_URL` and `TICKET_DRIFT_USERS` |
 | `-out-json` | — | write the full report to this file, also when the run fails |
 | `-dry-run` | false | look everything up and print the messages and resets; post and change nothing |
 | `-no-reset` | false | post the messages, worded "will be reset", and reset nothing |
@@ -75,6 +75,7 @@ would print:
 | `TICKET_DRIFT_APP_PRIVATE_KEY` | the App's PEM, base64-encoded so it survives an env var |
 | `DISCORD_WEBHOOK_URL` | channel webhook. Required unless `-dry-run`. If unset, `DISCORD_WEBHOOK` — the variable the repos' CircleCI contexts already carry for deploy notifications — is used |
 | `TICKET_DRIFT_USERS` | JSON list of people, see [below](#ticket_drift_users) |
+| `TICKET_DRIFT_USERS_URL` | `https://` link to the same list, downloaded when the run starts; overrides `TICKET_DRIFT_USERS`, see [below](#from-a-link) |
 | `CLICKUP_API_TOKEN`, `CLICKUP_TEAM_ID` | required in every mode, including `-dry-run`; the run refuses to start without them |
 
 ### Discord messages
@@ -142,6 +143,19 @@ per-repo file.
 An unknown field, a bad Discord ID, an entry with neither an email nor a
 login, or an email or login used by two entries stops the run at start-up with
 an error naming the entry.
+
+#### From a link
+
+Set `TICKET_DRIFT_USERS_URL` instead to keep the list in a bucket (S3, R2, …)
+and edit it there. The run downloads it first and stops, with nothing posted
+or reset, when the link is not `https://`, the answer is not 200 within 15
+seconds, the file is empty or over 1 MiB, a redirect leaves `https`, or the
+list is invalid. The log names the link without its query string, user info
+or fragment.
+
+Anyone with the link can read the emails in it, so give the file an
+unguessable name and keep the link as a secret in the CircleCI context. A
+signed S3 or R2 link expires within 7 days, which does not suit a CI job.
 
 The older form, `{"github-login": "discord-user-id"}`, is still accepted; with
 it no assignee can be matched. Versions before this list existed (v0.1.0)
@@ -211,7 +225,7 @@ CI only when you move the pin:
       ticket-drift:
         jobs:
           - ticket-drift:
-              context: ticket-drift   # TICKET_DRIFT_APP_*, DISCORD_WEBHOOK_URL, TICKET_DRIFT_USERS, CLICKUP_*
+              context: ticket-drift   # TICKET_DRIFT_APP_*, DISCORD_WEBHOOK_URL, TICKET_DRIFT_USERS(_URL), CLICKUP_*
               filters:
                 branches:
                   only: main

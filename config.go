@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net/url"
 	"regexp"
 	"slices"
 	"sort"
@@ -21,6 +22,7 @@ type config struct {
 	Targets     []string
 	Pattern     *regexp.Regexp
 	Users       map[string]string // GitHub login -> Discord user ID, keys lower-cased
+	UsersURL    string            // TICKET_DRIFT_USERS_URL; the list is downloaded when the run starts
 	OutJSON     string
 	DryRun      bool
 	NoReset     bool
@@ -60,7 +62,7 @@ func parseConfig(args []string, getenv func(string) string, readFile func(string
 	fs.StringVar(&cfg.Base, "base", "main", "base branch")
 	fs.StringVar(&targets, "targets", "dev,stage", "comma-separated target branches")
 	fs.StringVar(&pattern, "ticket-pattern", `IT-\d+`, "ticket id regular expression")
-	fs.StringVar(&usersFile, "users", "", "JSON file listing people and their Discord user IDs; overrides TICKET_DRIFT_USERS")
+	fs.StringVar(&usersFile, "users", "", "JSON file listing people and their Discord user IDs; overrides TICKET_DRIFT_USERS_URL and TICKET_DRIFT_USERS")
 	fs.StringVar(&cfg.OutJSON, "out-json", "", "write the JSON report to this path")
 	fs.BoolVar(&cfg.DryRun, "dry-run", false, "print what would be posted and reset; post nothing to Discord and reset no branch")
 	fs.BoolVar(&cfg.NoReset, "no-reset", false, "post the messages to Discord but reset no branch")
@@ -137,6 +139,17 @@ func parseConfig(args []string, getenv func(string) string, readFile func(string
 		return config{}, errors.New("config: DISCORD_WEBHOOK_URL (or DISCORD_WEBHOOK) is required unless -dry-run is set")
 	}
 
+	// The URL is only checked here; downloading it is network use, which
+	// parseConfig never does. Until then the lists are empty.
+	if raw := getenv("TICKET_DRIFT_USERS_URL"); usersFile == "" && raw != "" {
+		if !isHTTPSURL(raw) {
+			// The value is left out: a signed link carries its secret in it.
+			return config{}, errors.New("config: TICKET_DRIFT_USERS_URL must be an https:// URL")
+		}
+		cfg.UsersURL = raw
+		cfg.Users, cfg.ClickUpUsers = map[string]string{}, map[string]string{}
+		return cfg, nil
+	}
 	cfg.Users, cfg.ClickUpUsers, err = loadUsers(usersFile, getenv, readFile)
 	if err != nil {
 		return config{}, err
@@ -188,7 +201,12 @@ func loadUsers(file string, getenv func(string) string, readFile func(string) ([
 	} else {
 		raw = []byte(getenv("TICKET_DRIFT_USERS"))
 	}
+	return parseUsers(raw, source)
+}
 
+// parseUsers reads a people list, or the older object of login to ID, taken
+// from source. Empty input is an empty list.
+func parseUsers(raw []byte, source string) (byLogin, byEmail map[string]string, err error) {
 	raw = bytes.TrimSpace(raw)
 	switch {
 	case len(raw) == 0:
@@ -279,6 +297,11 @@ func parseLoginMap(raw []byte, source string) (map[string]string, error) {
 		users[lk] = parsed[k]
 	}
 	return users, nil
+}
+
+func isHTTPSURL(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && u.Scheme == "https" && u.Host != ""
 }
 
 // Discord refuses a whole message whose allowed_mentions holds a non-snowflake.
